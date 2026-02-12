@@ -1,0 +1,30 @@
+{
+  "name": "wb-iati-intelligence-agent",
+  "version": "1.0.0",
+  "description": "World Bank IATI Intelligence Agent - AI-powered development finance insights",
+  "main": "index.html",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "build": "echo 'No build required for static site'",
+    "dev": "python3 -m http.server 3000"
+  },
+  "keywords": [
+    "world-bank",
+    "iati",
+    "development-finance",
+    "ai-agent",
+    "dashboard",
+    "analytics"
+  ],
+  "author": "World Bank IATI Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0",
+    "python": ">=3.8.0"
+  },
+  "homepage": "https://wb-iati-intelligence-agent.ondigitalocean.app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/worldbank/iati-intelligence-agent.git"
+  }
+}

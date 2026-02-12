@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>World Bank IATI Intelligence Agent</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo-section">
+                <i class="fas fa-globe-americas"></i>
+                <div class="header-text">
+                    <h1>World Bank IATI Intelligence Agent</h1>
+                    <p class="tagline">AI-powered development finance insights across 170+ countries</p>
+                </div>
+            </div>
+            <div class="stats-banner">
+                <div class="stat-item">
+                    <i class="fas fa-dollar-sign"></i>
+                    <span>$50B+ Portfolio</span>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-map"></i>
+                    <span>170+ Countries</span>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-chart-line"></i>
+                    <span>Real-time Insights</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <nav class="nav-tabs">
+            <button class="nav-tab active" data-tab="chat">
+                <i class="fas fa-comments"></i>
+                Chat Analysis
+            </button>
+            <button class="nav-tab" data-tab="dashboard">
+                <i class="fas fa-chart-bar"></i>
+                Dashboards
+            </button>
+            <button class="nav-tab" data-tab="insights">
+                <i class="fas fa-lightbulb"></i>
+                Insights
+            </button>
+        </nav>
+
+        <!-- Chat Tab Content -->
+        <main class="tab-content active" id="chat">
+            <!-- Status Bar -->
+            <div class="status-bar">
+                <div class="connection-status">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span class="status-text" id="statusText">Initializing...</span>
+                </div>
+                <div class="data-freshness">
+                    <i class="fas fa-sync-alt"></i>
+                    <span>Data updated: Q4 2024</span>
+                </div>
+            </div>
+
+            <!-- Chat Container -->
+            <div class="chat-container">
+                <!-- Chat Messages Area -->
+                <div class="chat-messages" id="chatMessages">
+                    <!-- Welcome message will be inserted by JavaScript -->
+                </div>
+
+                <!-- Quick Actions -->
+                <div class="quick-actions">
+                    <h3><i class="fas fa-bolt"></i> Quick Actions</h3>
+                    <div class="action-grid">
+                        <button class="quick-action-btn" data-query="portfolio_overview">
+                            <i class="fas fa-chart-pie"></i>
+                            Portfolio Overview
+                        </button>
+                        <button class="quick-action-btn" data-query="sector_analysis">
+                            <i class="fas fa-layer-group"></i>
+                            Sector Analysis
+                        </button>
+                        <button class="quick-action-btn" data-query="geographic_insights">
+                            <i class="fas fa-globe-americas"></i>
+                            Geographic Insights
+                        </button>
+                        <button class="quick-action-btn" data-query="trend_analysis">
+                            <i class="fas fa-chart-line"></i>
+                            Trend Analysis
+                        </button>
+                        <button class="quick-action-btn" data-query="risk_assessment">
+                            <i class="fas fa-shield-alt"></i>
+                            Risk Assessment
+                        </button>
+                        <button class="quick-action-btn" data-query="create_dashboard">
+                            <i class="fas fa-plus-square"></i>
+                            Create Dashboard
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Standard Prompts Dropdown -->
+                <div class="prompt-section">
+                    <label for="standardPrompts">Expert Prompts:</label>
+                    <select id="standardPrompts" class="prompt-dropdown">
+                        <option value="">Choose an expert analysis...</option>
+                        <optgroup label="Portfolio Analysis">
+                            <option value="portfolio_performance">Analyze overall portfolio performance and efficiency</option>
+                            <option value="disbursement_analysis">Examine disbursement patterns and identify bottlenecks</option>
+                            <option value="commitment_trends">Analyze commitment trends by sector and region</option>
+                            <option value="portfolio_concentration">Assess portfolio concentration risks</option>
+                        </optgroup>
+                        <optgroup label="Sector Deep-Dive">
+                            <option value="education_performance">Deep-dive into education sector performance</option>
+                            <option value="health_outcomes">Analyze health sector investments and outcomes</option>
+                            <option value="infrastructure_impact">Assess infrastructure project impact and efficiency</option>
+                            <option value="climate_finance">Examine climate finance allocation and co-benefits</option>
+                        </optgroup>
+                        <optgroup label="Geographic Analysis">
+                            <option value="regional_comparison">Compare performance across regions</option>
+                            <option value="fragile_states">Analyze investments in fragile and conflict-affected states</option>
+                            <option value="country_portfolio">Detailed country portfolio analysis</option>
+                            <option value="subnational_distribution">Sub-national investment distribution analysis</option>
+                        </optgroup>
+                        <optgroup label="Executive Dashboards">
+                            <option value="executive_summary">Generate executive dashboard for board presentation</option>
+                            <option value="quarterly_review">Create quarterly performance review dashboard</option>
+                            <option value="strategic_overview">Strategic portfolio overview with recommendations</option>
+                            <option value="risk_dashboard">Portfolio risk assessment dashboard</option>
+                        </optgroup>
+                        <optgroup label="Advanced Analytics">
+                            <option value="predictive_analysis">Predictive analysis for future disbursements</option>
+                            <option value="anomaly_detection">Detect anomalies and unusual patterns</option>
+                            <option value="efficiency_benchmarking">Benchmark efficiency against peer institutions</option>
+                            <option value="results_correlation">Correlate investments with development outcomes</option>
+                        </optgroup>
+                    </select>
+                    <button class="use-prompt-btn" id="usePromptBtn" disabled>
+                        <i class="fas fa-paper-plane"></i>
+                        Use Selected Prompt
+                    </button>
+                </div>
+
+                <!-- Chat Input Area -->
+                <div class="chat-input-container">
+                    <div class="input-wrapper">
+                        <textarea
+                            id="messageInput"
+                            placeholder="Ask me about World Bank portfolio data, request dashboards, or analyze development finance trends..."
+                            rows="3"
+                        ></textarea>
+                        <div class="input-controls">
+                            <span class="char-count" id="charCount">0/5000</span>
+                            <button class="send-btn" id="sendBtn" disabled>
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="input-actions">
+                        <button class="action-btn secondary" id="clearBtn">
+                            <i class="fas fa-trash"></i>
+                            Clear Chat
+                        </button>
+                        <button class="action-btn secondary" id="exportBtn">
+                            <i class="fas fa-download"></i>
+                            Export Analysis
+                        </button>
+                        <button class="action-btn secondary" id="debugBtn">
+                            <i class="fas fa-bug"></i>
+                            Test API
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Dashboard Tab Content -->
+        <div class="tab-content" id="dashboard">
+            <div class="dashboard-section">
+                <h2><i class="fas fa-chart-bar"></i> Executive Dashboards</h2>
+                <p class="section-description">Generate professional dashboards for strategic decision-making</p>
+
+                <div class="dashboard-grid">
+                    <div class="dashboard-card" data-dashboard="executive">
+                        <div class="dashboard-icon">
+                            <i class="fas fa-crown"></i>
+                        </div>
+                        <h3>Executive Overview</h3>
+                        <p>Board-level KPIs and strategic portfolio insights</p>
+                        <div class="dashboard-features">
+                            <span class="feature-tag">KPI Cards</span>
+                            <span class="feature-tag">Trend Analysis</span>
+                            <span class="feature-tag">Risk Matrix</span>
+                        </div>
+                        <button class="create-dashboard-btn">Create Dashboard</button>
+                    </div>
+
+                    <div class="dashboard-card" data-dashboard="sector">
+                        <div class="dashboard-icon">
+                            <i class="fas fa-layer-group"></i>
+                        </div>
+                        <h3>Sector Deep-Dive</h3>
+                        <p>Comprehensive sector performance and trends</p>
+                        <div class="dashboard-features">
+                            <span class="feature-tag">Geographic Heatmap</span>
+                            <span class="feature-tag">Results Framework</span>
+                            <span class="feature-tag">Partner Network</span>
+                        </div>
+                        <button class="create-dashboard-btn">Create Dashboard</button>
+                    </div>
+
+                    <div class="dashboard-card" data-dashboard="country">
+                        <div class="dashboard-icon">
+                            <i class="fas fa-flag"></i>
+                        </div>
+                        <h3>Country Portfolio</h3>
+                        <p>Country-specific project and financial analysis</p>
+                        <div class="dashboard-features">
+                            <span class="feature-tag">Project Timeline</span>
+                            <span class="feature-tag">Financial Flow</span>
+                            <span class="feature-tag">Results Tracking</span>
+                        </div>
+                        <button class="create-dashboard-btn">Create Dashboard</button>
+                    </div>
+
+                    <div class="dashboard-card" data-dashboard="climate">
+                        <div class="dashboard-icon">
+                            <i class="fas fa-leaf"></i>
+                        </div>
+                        <h3>Climate Finance</h3>
+                        <p>Climate investment tracking and co-benefits analysis</p>
+                        <div class="dashboard-features">
+                            <span class="feature-tag">SDG Alignment</span>
+                            <span class="feature-tag">Co-benefits</span>
+                            <span class="feature-tag">Risk Assessment</span>
+                        </div>
+                        <button class="create-dashboard-btn">Create Dashboard</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Insights Tab Content -->
+        <div class="tab-content" id="insights">
+            <div class="insights-section">
+                <h2><i class="fas fa-lightbulb"></i> AI-Generated Insights</h2>
+                <p class="section-description">Automated insights and recommendations from portfolio analysis</p>
+
+                <div class="insights-grid">
+                    <div class="insight-card priority-high">
+                        <div class="insight-header">
+                            <div class="insight-icon">
+                                <i class="fas fa-exclamation-triangle"></i>
+                            </div>
+                            <div class="insight-meta">
+                                <span class="insight-type">Performance Alert</span>
+                                <span class="insight-priority">High Priority</span>
+                            </div>
+                        </div>
+                        <h3>Disbursement Efficiency Below Target</h3>
+                        <p>Portfolio disbursement rate at 68.2% vs 75% target, indicating potential implementation bottlenecks across 23 projects.</p>
+                        <div class="insight-actions">
+                            <button class="insight-action-btn primary">Analyze Further</button>
+                            <button class="insight-action-btn secondary">Generate Report</button>
+                        </div>
+                    </div>
+
+                    <div class="insight-card priority-medium">
+                        <div class="insight-header">
+                            <div class="insight-icon">
+                                <i class="fas fa-chart-line"></i>
+                            </div>
+                            <div class="insight-meta">
+                                <span class="insight-type">Trend Analysis</span>
+                                <span class="insight-priority">Medium</span>
+                            </div>
+                        </div>
+                        <h3>Climate Finance Growth Accelerating</h3>
+                        <p>Climate co-benefits increased 34% YoY, now representing $12.4B across adaptation and mitigation projects.</p>
+                        <div class="insight-actions">
+                            <button class="insight-action-btn primary">View Details</button>
+                            <button class="insight-action-btn secondary">Create Dashboard</button>
+                        </div>
+                    </div>
+
+                    <div class="insight-card priority-low">
+                        <div class="insight-header">
+                            <div class="insight-icon">
+                                <i class="fas fa-balance-scale"></i>
+                            </div>
+                            <div class="insight-meta">
+                                <span class="insight-type">Portfolio Balance</span>
+                                <span class="insight-priority">Low</span>
+                            </div>
+                        </div>
+                        <h3>Sector Diversification Optimal</h3>
+                        <p>Portfolio shows healthy diversification with no single sector exceeding 28% concentration threshold.</p>
+                        <div class="insight-actions">
+                            <button class="insight-action-btn primary">View Breakdown</button>
+                            <button class="insight-action-btn secondary">Monitor</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner">
+            <i class="fas fa-globe-americas fa-spin"></i>
+            <p>Analyzing World Bank portfolio data...</p>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-section">
+                <h4>Data Coverage</h4>
+                <ul>
+                    <li>$50B+ annual commitments</li>
+                    <li>170+ countries and territories</li>
+                    <li>IDA, IBRD, Trust Funds, Grants</li>
+                    <li>Quarterly updates with real-time transactions</li>
+                </ul>
+            </div>
+            <div class="footer-section">
+                <h4>Analytical Capabilities</h4>
+                <ul>
+                    <li>Natural language query processing</li>
+                    <li>Executive dashboard generation</li>
+                    <li>Predictive analytics and forecasting</li>
+                    <li>Anomaly detection and risk assessment</li>
+                </ul>
+            </div>
+            <div class="footer-section">
+                <h4>Export Formats</h4>
+                <ul>
+                    <li>Power BI dashboard configs</li>
+                    <li>Tableau workbook templates</li>
+                    <li>Excel data exports</li>
+                    <li>PDF executive reports</li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2024 World Bank IATI Intelligence Agent v1.0.0 - Empowering evidence-based development finance</p>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+
+    <!-- Digital Ocean Agent Widget Integration -->
+    <script type="text/javascript">
+        window.chatbotConfig = {
+            chatbotId: "1FV8wQ78ZHOndsmrfmaNXmjpxi-snRAW",
+            apiKey: "3vgEVfMeM5_rggpNoeLpe0agHBAN42yD",
+            agentEndpoint: "https://mrngtcmmhzbbdopptwzoirop.agents.do-ai.run"
+        };
+    </script>
+    <!-- Note: Add the DO widget script here if provided -->
+</body>
+</html>

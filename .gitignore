@@ -1,0 +1,25 @@
+# Deployment artifacts
+deploy-package/
+*.tar.gz
+
+# System files
+.DS_Store
+.vscode/
+*.log
+
+# Python cache (if any)
+__pycache__/
+*.pyc
+*.pyo
+
+# Node modules (if any)
+node_modules/
+
+# IDE files
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp
