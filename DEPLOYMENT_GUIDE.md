@@ -20,8 +20,8 @@ Your World Bank IATI Intelligence Agent is ready for deployment! This guide will
 ### 📊 Agent Configuration
 ```
 API Endpoint: https://mrngtcmmhzbbdopptwzoirop.agents.do-ai.run
-API Key: 3vgEVfMeM5_rggpNoeLpe0agHBAN42yD
-Chatbot ID: 1FV8wQ78ZHOndsmrfmaNXmjpxi-snRAW
+API Key: [YOUR_API_KEY_HERE]
+Chatbot ID: [YOUR_CHATBOT_ID_HERE]
 ```
 
 ---
@@ -98,8 +98,8 @@ The agent is pre-configured with your Digital Ocean credentials:
 ```javascript
 // In script.js - already configured
 const DO_AGENT_ENDPOINT = 'https://mrngtcmmhzbbdopptwzoirop.agents.do-ai.run';
-const DO_AGENT_API_KEY = '3vgEVfMeM5_rggpNoeLpe0agHBAN42yD';
-const CHATBOT_ID = '1FV8wQ78ZHOndsmrfmaNXmjpxi-snRAW';
+const DO_AGENT_API_KEY = 'YOUR_API_KEY_HERE';
+const CHATBOT_ID = 'YOUR_CHATBOT_ID_HERE';
 ```
 
 ### Branding Customization

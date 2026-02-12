@@ -1,10 +1,35 @@
 // World Bank IATI Intelligence Agent - JavaScript
 // Digital Ocean API Integration for Development Finance Analysis
 
-// API Configuration
-const DO_AGENT_ENDPOINT = 'https://mrngtcmmhzbbdopptwzoirop.agents.do-ai.run';
-const DO_AGENT_API_KEY = '3vgEVfMeM5_rggpNoeLpe0agHBAN42yD';
-const CHATBOT_ID = '1FV8wQ78ZHOndsmrfmaNXmjpxi-snRAW';
+// API Configuration - Load from environment or prompt user
+const DO_AGENT_ENDPOINT = getConfigValue('DO_AGENT_ENDPOINT', 'https://mrngtcmmhzbbdopptwzoirop.agents.do-ai.run');
+const DO_AGENT_API_KEY = getConfigValue('DO_AGENT_API_KEY');
+const CHATBOT_ID = getConfigValue('CHATBOT_ID');
+
+// Configuration helper function
+function getConfigValue(key, defaultValue = null) {
+    // Try to get from local development config (if available)
+    if (typeof window !== 'undefined' && window.WB_IATI_LOCAL_CONFIG && window.WB_IATI_LOCAL_CONFIG[key]) {
+        return window.WB_IATI_LOCAL_CONFIG[key];
+    }
+
+    // Try to get from environment variables (if available)
+    if (typeof process !== 'undefined' && process.env && process.env[key]) {
+        return process.env[key];
+    }
+
+    // Try to get from localStorage (for client-side storage)
+    if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem(`WB_IATI_${key}`);
+        if (stored) return stored;
+    }
+
+    // Use default value or prompt user
+    if (defaultValue) return defaultValue;
+
+    // For sensitive keys, show configuration modal
+    return null;
+}
 
 let currentSessionId = generateSessionId();
 let isProcessing = false;
@@ -85,6 +110,12 @@ const QUICK_ACTIONS = {
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
     console.log('🌍 World Bank IATI Intelligence Agent initializing...');
+
+    // Check if API configuration is needed
+    if (!DO_AGENT_API_KEY || !CHATBOT_ID) {
+        showConfigurationModal();
+        return;
+    }
 
     initializeEventListeners();
     initializeTabs();
@@ -1346,6 +1377,70 @@ if (typeof window !== 'undefined') {
         getCurrentSession: () => currentSessionId,
         getConversationHistory: () => conversationHistory
     };
+}
+
+// Configuration modal for API keys
+function showConfigurationModal() {
+    const modal = document.createElement('div');
+    modal.className = 'config-modal';
+    modal.innerHTML = `
+        <div class="config-modal-content">
+            <div class="config-header">
+                <h2><i class="fas fa-cog"></i> Configure World Bank IATI Agent</h2>
+                <p>Please provide your Digital Ocean agent credentials to proceed.</p>
+            </div>
+
+            <form id="configForm" class="config-form">
+                <div class="config-field">
+                    <label for="apiKey">Digital Ocean API Key:</label>
+                    <input type="password" id="apiKey" placeholder="Enter your API key..." required>
+                    <small>This will be stored securely in your browser</small>
+                </div>
+
+                <div class="config-field">
+                    <label for="chatbotId">Chatbot ID:</label>
+                    <input type="text" id="chatbotId" placeholder="Enter your chatbot ID..." required>
+                </div>
+
+                <div class="config-actions">
+                    <button type="submit" class="config-btn primary">
+                        <i class="fas fa-save"></i> Save Configuration
+                    </button>
+                </div>
+            </form>
+
+            <div class="config-help">
+                <h4>Where to find these credentials:</h4>
+                <ul>
+                    <li><strong>API Key:</strong> Digital Ocean → API → Tokens</li>
+                    <li><strong>Chatbot ID:</strong> Your agent configuration page</li>
+                </ul>
+                <p><i class="fas fa-shield-alt"></i> Your credentials are stored locally and never shared.</p>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Handle form submission
+    document.getElementById('configForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+
+        const apiKey = document.getElementById('apiKey').value;
+        const chatbotId = document.getElementById('chatbotId').value;
+
+        if (apiKey && chatbotId) {
+            // Store securely in localStorage
+            localStorage.setItem('WB_IATI_DO_AGENT_API_KEY', apiKey);
+            localStorage.setItem('WB_IATI_CHATBOT_ID', chatbotId);
+
+            // Remove modal
+            document.body.removeChild(modal);
+
+            // Reload to reinitialize with credentials
+            window.location.reload();
+        }
+    });
 }
 
 console.log('🌍 World Bank IATI Intelligence Agent script loaded successfully');

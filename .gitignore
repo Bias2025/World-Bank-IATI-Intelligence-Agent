@@ -2,6 +2,12 @@
 deploy-package/
 *.tar.gz
 
+# Local configuration with secrets
+config.local.js
+*.local.js
+.env
+.env.local
+
 # System files
 .DS_Store
 .vscode/

@@ -352,14 +352,15 @@
         </div>
     </footer>
 
+    <!-- Load local config for development (ignored by git) -->
+    <script src="config.local.js"></script>
     <script src="script.js"></script>
 
     <!-- Digital Ocean Agent Widget Integration -->
     <script type="text/javascript">
         window.chatbotConfig = {
-            chatbotId: "1FV8wQ78ZHOndsmrfmaNXmjpxi-snRAW",
-            apiKey: "3vgEVfMeM5_rggpNoeLpe0agHBAN42yD",
-            agentEndpoint: "https://mrngtcmmhzbbdopptwzoirop.agents.do-ai.run"
+            // Configuration will be loaded dynamically from secure storage
+            // or prompted from user on first use
         };
     </script>
     <!-- Note: Add the DO widget script here if provided -->

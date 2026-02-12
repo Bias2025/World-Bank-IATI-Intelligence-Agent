@@ -13,10 +13,10 @@ from datetime import datetime
 class AgentConfig:
     """Core configuration for the WB IATI Intelligence Agent"""
 
-    # API Configuration
-    api_key: str = "3vgEVfMeM5_rggpNoeLpe0agHBAN42yD"
-    endpoint: str = "https://mrngtcmmhzbbdopptwzoirop.agents.do-ai.run"
-    chatbot_id: str = "1FV8wQ78ZHOndsmrfmaNXmjpxi-snRAW"
+    # API Configuration - Set via environment variables or configuration
+    api_key: str = "YOUR_DIGITAL_OCEAN_API_KEY"
+    endpoint: str = "https://your-agent-endpoint.agents.do-ai.run"
+    chatbot_id: str = "YOUR_CHATBOT_ID"
 
     # Agent Identity
     agent_name: str = "World Bank IATI Intelligence Agent"

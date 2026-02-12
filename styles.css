@@ -1163,6 +1163,144 @@ body {
     color: var(--wb-orange);
 }
 
+/* Configuration Modal */
+.config-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    backdrop-filter: blur(5px);
+}
+
+.config-modal-content {
+    background: var(--white);
+    border-radius: var(--border-radius-lg);
+    padding: var(--spacing-xl);
+    max-width: 500px;
+    width: 90%;
+    box-shadow: var(--shadow-lg);
+    animation: slideIn 0.3s ease;
+}
+
+.config-header {
+    text-align: center;
+    margin-bottom: var(--spacing-lg);
+}
+
+.config-header h2 {
+    color: var(--primary);
+    margin-bottom: var(--spacing-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-sm);
+}
+
+.config-header p {
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.config-form {
+    margin-bottom: var(--spacing-lg);
+}
+
+.config-field {
+    margin-bottom: var(--spacing-lg);
+}
+
+.config-field label {
+    display: block;
+    color: var(--primary);
+    font-weight: 600;
+    margin-bottom: var(--spacing-xs);
+}
+
+.config-field input {
+    width: 100%;
+    padding: var(--spacing-md);
+    border: 2px solid var(--border);
+    border-radius: var(--border-radius);
+    font-size: var(--font-size-base);
+    transition: all 0.3s ease;
+}
+
+.config-field input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(15, 76, 129, 0.1);
+}
+
+.config-field small {
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    display: block;
+    margin-top: var(--spacing-xs);
+}
+
+.config-actions {
+    text-align: center;
+}
+
+.config-btn {
+    background: var(--primary);
+    color: var(--white);
+    border: none;
+    padding: var(--spacing-md) var(--spacing-lg);
+    border-radius: var(--border-radius);
+    font-size: var(--font-size-base);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.config-btn:hover {
+    background: var(--primary-light);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+
+.config-help {
+    background: var(--light-gray);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-md);
+    border-left: 4px solid var(--accent);
+}
+
+.config-help h4 {
+    color: var(--primary);
+    margin-bottom: var(--spacing-sm);
+    font-size: var(--font-size-base);
+}
+
+.config-help ul {
+    margin: var(--spacing-sm) 0;
+    padding-left: var(--spacing-lg);
+}
+
+.config-help li {
+    margin-bottom: var(--spacing-xs);
+    color: var(--text-primary);
+}
+
+.config-help p {
+    margin: var(--spacing-sm) 0 0 0;
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
     .container {

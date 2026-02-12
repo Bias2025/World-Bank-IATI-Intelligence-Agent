@@ -62,10 +62,11 @@ pip install -r requirements.txt
 
 2. **Configure API credentials:**
 ```python
-# Configuration is already set in wb_iati_agent_config.py
-API_KEY = "3vgEVfMeM5_rggpNoeLpe0agHBAN42yD"
-ENDPOINT = "https://mrngtcmmhzbbdopptwzoirop.agents.do-ai.run"
-CHATBOT_ID = "1FV8wQ78ZHOndsmrfmaNXmjpxi-snRAW"
+# API credentials will be prompted on first use
+# Or set via environment variables:
+API_KEY = "YOUR_DIGITAL_OCEAN_API_KEY"
+ENDPOINT = "https://your-agent-endpoint.agents.do-ai.run"
+CHATBOT_ID = "YOUR_CHATBOT_ID"
 ```
 
 3. **Initialize and test:**
