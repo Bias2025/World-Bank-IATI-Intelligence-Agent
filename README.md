@@ -182,9 +182,9 @@ The agent can process sophisticated natural language queries:
 ```python
 @dataclass
 class AgentConfig:
-    api_key: str = "3vgEVfMeM5_rggpNoeLpe0agHBAN42yD"
+    api_key: str = "3xxxxx"
     endpoint: str = "https://mrngtcmmhzbbdopptwzoirop.agents.do-ai.run"
-    chatbot_id: str = "1FV8wQ78ZHOndsmrfmaNXmjpxi-snRAW"
+    chatbot_id: str = "1xxxxxxxx"
     data_coverage: str = "$50B+ annual commitments"
     countries_covered: int = 170
 ```
