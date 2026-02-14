@@ -2,13 +2,16 @@
 """
 World Bank — IATI Intelligence Agent (Streamlit-native, client-demo ready)
 
-What this version fixes/improves:
-- Auto-renders an impressive "consulting-style" dashboard immediately after a successful query
-- Works even when WBIATIIntelligenceAgent is missing methods (_analyze_trends/_analyze_sector_data/etc.)
-  by falling back to the DO agent (chat endpoint) and/or local dashboard templates
-- Keeps Raw JSON hidden by default (still available via expander)
-- Quick Actions + Expert Templates reliably populate the query and can optionally auto-run
-- Masks secrets in the sidebar (never prints raw env values)
+Fixes in this version:
+- Better, multi-color charts (teal/cyan/sky + purple accents). Heatmap has a legend/colorbar.
+- Robust async runner that DOES NOT close the Streamlit event loop (fixes "Event loop is closed").
+- Quick actions work reliably even when WBIATIIntelligenceAgent is missing methods:
+  - First try orchestrator pipeline
+  - If it fails due to missing agent methods, fallback to DO agent (chat endpoint)
+  - Always render a client-ready dashboard in the UI (so the demo never looks broken)
+- Auto-dashboard after query (optional toggle)
+- Raw JSON hidden by default (expander)
+- Masks secrets in sidebar
 """
 
 from __future__ import annotations
@@ -16,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import io
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, Optional, List
@@ -25,7 +27,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# Project imports
 from wb_iati_agent_config import get_agent_config
 from main_agent_orchestrator import WBIATIAgentOrchestrator
 
@@ -59,19 +60,41 @@ st.markdown(_CSS, unsafe_allow_html=True)
 
 
 # -----------------------------
-# Safe async runner for Streamlit
+# Safe async runner (Streamlit-safe, avoids closing loop)
 # -----------------------------
 def run_async_safely(coro):
     """
-    Run an async coroutine from Streamlit safely even if an event loop is already running.
+    Run coroutine safely in Streamlit:
+    - If there's a running loop, use nest_asyncio + run_until_complete (does not close loop)
+    - If no loop, fallback to asyncio.run
     """
     try:
-        return asyncio.run(coro)
+        loop = asyncio.get_event_loop()
     except RuntimeError:
-        # event loop is running (Streamlit); enable nesting
+        loop = None
+
+    # No loop exists
+    if loop is None:
+        return asyncio.run(coro)
+
+    # Loop exists but is closed -> create a fresh loop
+    if loop.is_closed():
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            return new_loop.run_until_complete(coro)
+        finally:
+            # Don't close here; Streamlit may reuse it
+            pass
+
+    # Loop exists and is running (Streamlit)
+    if loop.is_running():
         import nest_asyncio
         nest_asyncio.apply()
-        return asyncio.run(coro)
+        return loop.run_until_complete(coro)
+
+    # Loop exists and not running
+    return loop.run_until_complete(coro)
 
 
 # -----------------------------
@@ -100,19 +123,31 @@ def mask_value(v: Optional[str], keep_end: int = 6) -> str:
 
 
 # -----------------------------
-# Cached orchestrator (no async init here)
+# Cached orchestrator
 # -----------------------------
 @st.cache_resource(ttl=60 * 60)
 def get_orchestrator() -> WBIATIAgentOrchestrator:
     cfg = get_agent_config()
-    # Env override (Streamlit Secrets become env vars)
     cfg.api_key = os.environ.get("DO_API_KEY", getattr(cfg, "api_key", None))
     cfg.endpoint = os.environ.get("DO_ENDPOINT", getattr(cfg, "endpoint", None))
     cfg.chatbot_id = os.environ.get("DO_CHATBOT_ID", getattr(cfg, "chatbot_id", None))
     return WBIATIAgentOrchestrator(cfg)
 
-
 orchestrator = get_orchestrator()
+
+
+# -----------------------------
+# Visual palette (teal/cyan/sky + lavender/purple)
+# -----------------------------
+PALETTE = ["#0ea5a9", "#38bdf8", "#60a5fa", "#8b5cf6", "#a78bfa"]  # modern cool gradient
+HEATMAP_SCALE = [
+    [0.0, "#0b1020"],   # deep
+    [0.2, "#312e81"],   # indigo
+    [0.4, "#0ea5a9"],   # teal
+    [0.6, "#38bdf8"],   # cyan
+    [0.8, "#a78bfa"],   # lavender
+    [1.0, "#ffffff"],   # light
+]
 
 
 # -----------------------------
@@ -133,14 +168,13 @@ def render_initiatives_table():
         {"Initiative": "Climate Resilience Infra", "Lead": "Infra GP", "Status": "New", "Budget (Bn USD)": 90, "Timeline": "2026–2046"},
     ])
 
-def render_consulting_dashboard(title: str = "Global Portfolio Dashboard"):
+def render_consulting_dashboard(title: str = "Global Portfolio Dashboard (Preview)"):
     """
-    Polished "consulting style" dashboard with charts and infographics.
-    Uses placeholder data until you wire real metrics—still impressive for client demos.
+    Polished dashboard with colorful charts + heatmap legend.
+    Uses placeholder data until you wire live portfolio data.
     """
     st.markdown(f"## {title}")
 
-    # KPI row (preview)
     render_kpi_row([
         {"label": "Budget Utilized", "value": "75%", "delta": "+2% QoQ"},
         {"label": "Impact Score", "value": "4.2 / 5.0", "delta": "+0.1"},
@@ -157,22 +191,26 @@ def render_consulting_dashboard(title: str = "Global Portfolio Dashboard"):
             "Category": ["Africa", "Asia", "Education", "Health", "Europe", "MENA"],
             "Value": [28, 18, 24, 19, 6, 3]
         })
-        fig = px.bar(df, x="Category", y="Value")
+        fig = px.bar(df, x="Category", y="Value", color="Category",
+                     color_discrete_sequence=PALETTE)
+        fig.update_layout(showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
     with c2:
         st.subheader("Active projects (global)")
-        # map-like infographic proxy (bubble chart)
         geo = pd.DataFrame({
             "Region": ["Africa", "Asia", "Europe", "MENA", "Americas"],
             "Active Projects": [420, 380, 120, 90, 190]
         })
-        fig2 = px.scatter(geo, x="Region", y="Active Projects", size="Active Projects")
+        fig2 = px.scatter(geo, x="Region", y="Active Projects", size="Active Projects",
+                          color="Region", color_discrete_sequence=PALETTE)
+        fig2.update_layout(showlegend=False)
         st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
     c3, c4 = st.columns([2, 1])
+
     with c3:
         st.subheader("Portfolio trend analysis (Bn USD)")
         df2 = pd.DataFrame({
@@ -180,18 +218,32 @@ def render_consulting_dashboard(title: str = "Global Portfolio Dashboard"):
             "Investment": [210, 235, 250, 300, 270, 310],
             "Disbursement": [95, 110, 135, 160, 190, 230]
         })
-        fig3 = px.line(df2, x="Year", y=["Investment", "Disbursement"])
+        fig3 = px.line(df2, x="Year", y=["Investment", "Disbursement"],
+                       color_discrete_sequence=PALETTE)
+        # Keep legend, it’s useful here
         st.plotly_chart(fig3, use_container_width=True)
 
     with c4:
         st.subheader("Risk heatmap (portfolio)")
-        heat = pd.DataFrame([
-            ["High", 7, 4, 8, 12, 30, 36, 25],
-            ["Moderate", 8, 15, 12, 12, 12, 23, 25],
-            ["Low", 8, 5, 6, 15, 17, 25, 26],
-            ["Stable", 7, 3, 5, 15, 25, 23, 25],
-        ], columns=["Band", "Geopolitical", "Economic", "Financial", "Social", "Environmental", "Operational", "Cyber"])
-        fig4 = px.imshow(heat.set_index("Band"), aspect="auto")
+        # numeric matrix (higher = more risk)
+        heat = pd.DataFrame(
+            [
+                [7, 4, 8, 12, 30, 36, 25],
+                [8, 15, 12, 12, 12, 23, 25],
+                [8, 5, 6, 15, 17, 25, 26],
+                [7, 3, 5, 15, 25, 23, 25],
+            ],
+            index=["High", "Moderate", "Low", "Stable"],
+            columns=["Geopolitical", "Economic", "Financial", "Social", "Environmental", "Operational", "Cyber"]
+        )
+        fig4 = px.imshow(
+            heat,
+            aspect="auto",
+            color_continuous_scale=HEATMAP_SCALE,
+            labels=dict(color="Risk score")
+        )
+        # ensure colorbar is visible and labeled
+        fig4.update_layout(coloraxis_colorbar=dict(title="Risk score"))
         st.plotly_chart(fig4, use_container_width=True)
 
     st.markdown("<hr/>", unsafe_allow_html=True)
@@ -208,7 +260,7 @@ def render_executive_brief(summary_text: str, key_points: Optional[List[str]] = 
 
 
 # -----------------------------
-# Robust response normalization + fallback
+# Response normalization + fallback
 # -----------------------------
 def normalize_to_dict(resp: Any) -> Dict[str, Any]:
     if resp is None:
@@ -227,25 +279,18 @@ def normalize_to_dict(resp: Any) -> Dict[str, Any]:
 def fallback_do_agent_query(query: str) -> Dict[str, Any]:
     """
     If local agent paths break due to missing methods, call the DO agent directly.
-    This keeps quick actions working and makes the demo resilient.
+    Avoids demo-breaking failures for quick actions.
     """
     try:
         do_resp = run_async_safely(orchestrator.chatbot.send_query(query, context={"mode": "fallback"}))
         d = normalize_to_dict(do_resp)
         if d.get("success") is True:
             data = d.get("data", "")
-            # Try to extract a nice narrative
-            summary = ""
             if isinstance(data, dict):
-                summary = data.get("summary") or data.get("executive_summary") or json.dumps(data)[:800]
+                summary = data.get("summary") or data.get("executive_summary") or json.dumps(data)[:900]
             else:
                 summary = str(data)[:1200]
-            return {
-                "success": True,
-                "executive_summary": summary,
-                "source": "do_agent_fallback",
-                "raw": d
-            }
+            return {"success": True, "executive_summary": summary, "raw": d}
         return {"success": False, "error": d.get("error") or "DO agent fallback failed", "raw": d}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -258,8 +303,6 @@ if "query_text" not in st.session_state:
     st.session_state["query_text"] = ""
 if "last_response" not in st.session_state:
     st.session_state["last_response"] = None
-if "last_dashboard" not in st.session_state:
-    st.session_state["last_dashboard"] = None
 
 
 # -----------------------------
@@ -269,12 +312,11 @@ st.markdown(
     f"""
     <div class="hero">
       <h1>World Bank — IATI Intelligence Agent</h1>
-      <p>Client-ready portfolio insights, dashboards, and quick actions. <span style="opacity:.85">({datetime.utcnow().strftime('%Y-%m-%d')})</span></p>
+      <p>Client-ready portfolio insights and dashboards. <span style="opacity:.85">({datetime.utcnow().strftime('%Y-%m-%d')})</span></p>
     </div>
     """,
     unsafe_allow_html=True,
 )
-
 st.write("")
 
 
@@ -286,11 +328,10 @@ with st.sidebar:
     st.markdown(f"- **Endpoint:** {mask_value(os.environ.get('DO_ENDPOINT'))}")
     st.markdown(f"- **Chatbot ID:** {mask_value(os.environ.get('DO_CHATBOT_ID'))}")
     st.markdown(f"- **API key present:** {'✅' if bool(os.environ.get('DO_API_KEY')) else '❌'}")
-
     st.markdown("---")
     auto_run_actions = st.toggle("Auto-run when selecting a quick action", value=False)
     auto_dashboard = st.toggle("Auto-generate dashboard after query", value=True)
-    st.markdown("<div class='muted small'>Secrets are masked. Configure in Streamlit Cloud → Settings → Secrets.</div>", unsafe_allow_html=True)
+    st.caption("Secrets are masked. Configure in Streamlit Cloud → Settings → Secrets.")
 
 
 # -----------------------------
@@ -301,35 +342,28 @@ left, right = st.columns([3, 1])
 with right:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.subheader("Agent status")
-    status = {}
     try:
         status = orchestrator.get_agent_status()
+        st.json({
+            "name": status.get("agent_info", {}).get("name", "World Bank IATI Intelligence Agent"),
+            "version": status.get("agent_info", {}).get("version", "1.0.0"),
+            "initialized": status.get("agent_info", {}).get("initialized", False),
+            "endpoint": mask_value(getattr(orchestrator.config, "endpoint", None))
+        })
     except Exception:
-        status = {"agent_info": {"name": "World Bank IATI Intelligence Agent", "version": "1.0.0", "initialized": False}}
-
-    st.json({
-        "name": status.get("agent_info", {}).get("name", "World Bank IATI Intelligence Agent"),
-        "version": status.get("agent_info", {}).get("version", "1.0.0"),
-        "initialized": status.get("agent_info", {}).get("initialized", False),
-        "endpoint": mask_value(getattr(orchestrator.config, "endpoint", None))
-    })
-
-    if not status.get("agent_info", {}).get("initialized", False):
-        st.warning("Agent not fully initialized yet. It will initialize on first request.")
+        st.json({"name": "World Bank IATI Intelligence Agent", "initialized": False})
     st.markdown("</div>", unsafe_allow_html=True)
-
 
 with left:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.subheader("Chat / Query")
-    st.markdown("<div class='muted small'>Ask questions, run quick actions, and get a dashboard-ready output suitable for clients.</div>", unsafe_allow_html=True)
+    st.caption("Use templates or quick actions. The app will always render a client-ready dashboard view.")
 
-    # Load templates
     prompts = load_prompt_templates()
     expert_prompts = prompts.get("expert_prompts", {}) or {}
     quick_actions = prompts.get("quick_actions", {}) or {}
 
-    # Expert prompt selector
+    # Expert templates
     if expert_prompts:
         chosen = st.selectbox(
             "Expert templates",
@@ -337,14 +371,13 @@ with left:
             format_func=lambda k: "— select a template —" if k == "" else k.replace("_", " ").title()
         )
         if chosen:
-            st.caption("Template preview")
             st.code(expert_prompts[chosen], language="text")
             if st.button("Use template"):
                 st.session_state["query_text"] = expert_prompts[chosen]
                 if auto_run_actions:
                     st.experimental_rerun()
 
-    # Quick actions
+    # Quick actions buttons
     if quick_actions:
         st.markdown("**Quick actions**")
         qa_items = list(quick_actions.items())
@@ -355,7 +388,6 @@ with left:
                 if auto_run_actions:
                     st.experimental_rerun()
 
-    # Query text area
     query = st.text_area("Enter your natural language query", height=160, value=st.session_state["query_text"])
 
     b1, b2, b3 = st.columns([1, 1, 1])
@@ -366,44 +398,48 @@ with left:
     if clear_btn:
         st.session_state["query_text"] = ""
         st.session_state["last_response"] = None
-        st.session_state["last_dashboard"] = None
         st.experimental_rerun()
 
-    # -----------------------------
-    # Run Query handler
-    # -----------------------------
     def execute_query(q: str) -> Dict[str, Any]:
         """
-        Execute via orchestrator; on known missing-method errors, fallback to DO agent.
+        Try orchestrator first. If it fails due to missing agent methods, fallback to DO agent.
+        This keeps sector analysis / geo insights / trend analysis usable in the demo right now.
         """
-        # Try orchestrator pipeline first
         try:
             resp = run_async_safely(orchestrator.process_user_query(q))
             d = normalize_to_dict(resp)
-            # If orchestrator returns error dict
-            if d.get("error") is True or d.get("success") is False:
-                raise Exception(d.get("message") or d.get("error") or "Orchestrator returned error")
+            if d.get("error") is True:
+                raise Exception(d.get("message") or "Orchestrator error")
             return {"success": True, "payload": d, "source": "orchestrator"}
         except Exception as e:
             msg = str(e)
-            # Known missing method issues: keep demo working
-            if ("object has no attribute '_analyze_trends'" in msg) or ("_analyze_sector_data" in msg) or ("_execute_analysis" in msg):
+
+            # Known missing-method failures from WBIATIIntelligenceAgent
+            known_missing = any(s in msg for s in [
+                "_analyze_trends",
+                "_analyze_sector_data",
+                "_analyze_geographic_data",
+                "_general_analysis",
+                "_execute_analysis"
+            ])
+
+            if known_missing or "AttributeError" in msg:
                 fb = fallback_do_agent_query(q)
                 if fb.get("success"):
-                    # Wrap into a response compatible with UI
                     return {
                         "success": True,
                         "payload": {
                             "executive_summary": fb.get("executive_summary", ""),
                             "key_insights": [],
                             "recommendations": [],
-                            "do_agent_insights": fb.get("raw", {}),
                             "enhanced": True,
-                            "source": "do_agent_fallback"
+                            "source": "do_agent_fallback",
+                            "raw_do_agent": fb.get("raw", {})
                         },
                         "source": "do_agent_fallback"
                     }
                 return {"success": False, "error": fb.get("error", msg), "source": "do_agent_fallback"}
+
             return {"success": False, "error": msg, "source": "orchestrator"}
 
     if run_btn:
@@ -420,10 +456,8 @@ with left:
                 st.session_state["last_response"] = result
                 st.success(f"Query processed ({out.get('source')})")
 
-                # Executive summary + dashboard immediately
                 summary_text = result.get("executive_summary") or "Portfolio snapshot generated."
                 key_pts = []
-                # If you have key insights, turn into bullet points
                 if isinstance(result.get("key_insights"), list):
                     for it in result["key_insights"][:5]:
                         if isinstance(it, dict):
@@ -440,36 +474,26 @@ with left:
                 with st.expander("Raw response (JSON)"):
                     st.json(result)
 
-    # -----------------------------
-    # Create Dashboard handler
-    # -----------------------------
     if dash_btn:
-        with st.spinner("Generating executive dashboard..."):
-            # Use local consulting dashboard renderer regardless of backend availability
-            # If you want to also generate config JSON from dashboard_framework/orchestrator, try it safely:
-            dash_config = None
-            try:
-                dash_config = run_async_safely(
-                    orchestrator.create_executive_dashboard(
-                        "executive",
-                        parameters={},
-                        title="Global Portfolio Dashboard",
-                        context={"source_query": query.strip(), "style": "consulting"}
-                    )
-                )
-                dash_config = normalize_to_dict(dash_config)
-                if dash_config.get("error"):
-                    dash_config = None
-            except Exception:
-                dash_config = None
-
         st.success("Dashboard ready")
         render_consulting_dashboard("Global Portfolio Dashboard (Preview)")
-
-        if dash_config:
-            with st.expander("Raw dashboard JSON"):
-                st.json(dash_config)
+        # Optionally expose dashboard JSON if your orchestrator supports it without failing
+        try:
+            dash_cfg = run_async_safely(
+                orchestrator.create_executive_dashboard(
+                    "executive",
+                    parameters={},
+                    title="Global Portfolio Dashboard",
+                    context={"source_query": query.strip(), "style": "consulting"}
+                )
+            )
+            dash_cfg = normalize_to_dict(dash_cfg)
+            if isinstance(dash_cfg, dict) and not dash_cfg.get("error"):
+                with st.expander("Raw dashboard JSON"):
+                    st.json(dash_cfg)
+        except Exception:
+            pass
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-st.markdown("<div class='muted small'>Built with care — treat model outputs as advisory. Sanitize before operational use.</div>", unsafe_allow_html=True)
+st.caption("Built with care — treat model outputs as advisory. Sanitize before operational use.")
