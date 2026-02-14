@@ -28,6 +28,78 @@ from advanced_analytics import (
     AnomalyDetector, InsightGenerator
 )
 
+from dataclasses import asdict
+
+async def create_executive_dashboard(
+    self,
+    dashboard_type: str,
+    parameters: Dict = None,
+    title: Optional[str] = None,
+    context: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Create executive dashboard with safe component list + export formats (Streamlit-friendly)."""
+
+    logger.info(f"📊 Creating {dashboard_type} dashboard...")
+
+    try:
+        parameters = parameters or {}
+        context = context or {}
+
+        # Build dashboard layout (from dashboard_framework)
+        if dashboard_type == "executive":
+            dashboard = ExecutiveDashboardBuilder.create_portfolio_overview()
+        elif dashboard_type == "sector":
+            sector = parameters.get("sector", "Education")
+            dashboard = SectorDashboardBuilder.create_sector_analysis(sector)
+        elif dashboard_type == "country":
+            country = parameters.get("country", "India")
+            dashboard = CountryDashboardBuilder.create_country_portfolio(country)
+        elif dashboard_type == "climate":
+            dashboard = ThematicDashboardBuilder.create_climate_dashboard()
+        else:
+            raise ValueError(f"Unknown dashboard type: {dashboard_type}")
+
+        if title:
+            dashboard.title = title
+
+        # Export configs
+        json_config = DashboardExporter.export_to_json(dashboard)
+        powerbi_config = DashboardExporter.export_to_powerbi(dashboard)
+
+        # ✅ IMPORTANT: Return BOTH list + count (no more 'int not subscriptable')
+        components_list = [asdict(c) for c in dashboard.components]
+
+        self.session_stats["dashboards_created"] += 1
+
+        return {
+            "dashboard_id": dashboard.dashboard_id,
+            "title": dashboard.title,
+            "description": dashboard.description,
+            "status": "created",
+
+            # ✅ FIX
+            "components_count": len(components_list),
+            "components": components_list,
+
+            "filters": getattr(dashboard, "filters", []),
+            "layout_type": getattr(dashboard, "layout_type", "grid"),
+
+            "configurations": {
+                "json": json_config,
+                "powerbi": powerbi_config
+            },
+            "metadata": {
+                "creation_time": datetime.now().isoformat(),
+                "refresh_interval": dashboard.refresh_interval,
+                "permissions": dashboard.permissions
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Dashboard creation failed: {e}", exc_info=True)
+        return {"error": str(e), "dashboard_type": dashboard_type}
+
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
