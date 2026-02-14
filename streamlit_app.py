@@ -23,6 +23,24 @@ from typing import Any, Dict, Optional
 # Project imports - ensure these modules exist in your repo
 from wb_iati_agent_config import get_agent_config
 from main_agent_orchestrator import WBIATIAgentOrchestrator
+# safe_async.py snippet — paste into streamlit_app.py near the top (after imports)
+import asyncio
+
+def run_async_safely(coro):
+    """
+    Run an async coroutine safely from sync code in environments where an
+    event loop might already be running (like Streamlit).
+    Usage: run_async_safely(orchestrator.some_async_method(...))
+    """
+    try:
+        # Typical case when no loop is running
+        return asyncio.run(coro)
+    except RuntimeError as e:
+        # event loop already running -> use nest_asyncio to allow nested run
+        import nest_asyncio
+        nest_asyncio.apply()
+        return asyncio.run(coro)
+
 
 # ---- Page config and lightweight styling ----
 st.set_page_config(page_title="WB IATI Intelligence Agent", layout="wide", initial_sidebar_state="expanded")
