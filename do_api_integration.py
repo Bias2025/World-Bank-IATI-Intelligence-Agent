@@ -1,307 +1,319 @@
-# do_api_integration.py
 """
-DigitalOcean Gradient AI Agents integration (OpenAI-compatible)
+DigitalOcean Agent Endpoint Integration (Streamlit Cloud-ready)
 
 Fixes:
-- Uses the correct Agent endpoint path:  /api/v1/chat/completions
-- Parses standard chat.completion schema: choices[0].message.content
-- Optional inclusion of retrieval/guardrails/functions info (if supported by your agent endpoint)
-- Uses synchronous requests to avoid Streamlit event loop issues
-- Provides a clean, stable APIResponse object + helper extraction of JSON metrics blocks
-
-Expected Streamlit secrets / env vars:
-- DO_ENDPOINT   (e.g. https://xxxx.agents.do-ai.run)
-- DO_API_KEY    (Agent access key)
-- DO_CHATBOT_ID (optional; retained for backward-compat; not required by /chat/completions)
+- Uses correct DigitalOcean Agent endpoint path: {AGENT_ENDPOINT}/api/v1/chat/completions
+- OpenAI-compatible payload: {"messages":[...], "stream": false, ...}
+- Optional retrieval/functions/guardrails info (for real grounded data + citations)
+- Robust JSON extraction from agent responses
+- Graceful handling of 404s / schema drift
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+
+from wb_iati_agent_config import AgentConfig
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-# -----------------------------
+# ----------------------------
 # Data structures
-# -----------------------------
+# ----------------------------
 @dataclass
 class APIResponse:
     success: bool
     status_code: int
     data: Optional[Dict[str, Any]] = None
-    text: str = ""
     error: Optional[str] = None
     execution_time: Optional[float] = None
-    url: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "success": self.success,
-            "status_code": self.status_code,
-            "data": self.data,
-            "text": self.text,
-            "error": self.error,
-            "execution_time": self.execution_time,
-            "url": self.url,
-        }
 
 
-# -----------------------------
+# ----------------------------
 # Helpers
-# -----------------------------
-def _safe_json_loads(s: str) -> Optional[Any]:
+# ----------------------------
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+_JSON_OBJECT_RE = re.compile(r"(\{(?:[^{}]|(?R))*\})", re.DOTALL)  # recursive-ish best effort
+
+
+def _safe_json_loads(s: str) -> Optional[dict]:
     try:
         return json.loads(s)
     except Exception:
         return None
 
 
-def extract_json_block(text: str) -> Optional[Dict[str, Any]]:
+def _extract_json_from_text(text: str) -> Optional[dict]:
     """
-    Extract a JSON object from:
-    - a ```json fenced block
-    - or the first parseable {...} object
+    Tries, in order:
+    1) fenced ```json {..}```
+    2) first valid JSON object substring
+    3) direct json.loads(text)
     """
     if not text:
         return None
 
-    # Prefer fenced json blocks
-    m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    m = _JSON_FENCE_RE.search(text)
     if m:
         obj = _safe_json_loads(m.group(1))
-        if isinstance(obj, dict):
+        if obj is not None:
             return obj
 
-    # Fallback: first parseable object-like chunk
-    candidates = re.findall(r"\{(?:[^{}]|(?R))*\}", text, flags=re.DOTALL)
-    for c in candidates:
-        obj = _safe_json_loads(c)
-        if isinstance(obj, dict):
+    # try direct
+    obj = _safe_json_loads(text.strip())
+    if obj is not None:
+        return obj
+
+    # try substring extraction
+    for m2 in _JSON_OBJECT_RE.finditer(text):
+        cand = m2.group(1)
+        obj = _safe_json_loads(cand)
+        if obj is not None:
             return obj
+
     return None
 
 
-def build_messages(user_prompt: str, system_prompt: Optional[str] = None) -> List[Dict[str, str]]:
-    msgs: List[Dict[str, str]] = []
-    if system_prompt:
-        msgs.append({"role": "system", "content": system_prompt})
-    msgs.append({"role": "user", "content": user_prompt})
-    return msgs
+def _normalize_endpoint(endpoint: str) -> str:
+    endpoint = (endpoint or "").strip().rstrip("/")
+    return endpoint
 
 
-# -----------------------------
-# DigitalOcean Agent client (OpenAI-compatible)
-# -----------------------------
+# ----------------------------
+# Core client
+# ----------------------------
 class DigitalOceanAgentClient:
     """
-    Calls a DigitalOcean Gradient AI Agent endpoint using OpenAI-compatible Chat Completions.
+    Calls a deployed DO Agent endpoint (agents.do-ai.run) using the documented schema.
+    Docs: {AGENT_ENDPOINT}/docs
+    Chat endpoint: POST {AGENT_ENDPOINT}/api/v1/chat/completions
     """
 
-    def __init__(
-        self,
-        endpoint: str,
-        api_key: str,
-        timeout_s: int = 45,
-        default_model: Optional[str] = None,
-        chatbot_id: Optional[str] = None,  # retained for older codepaths (not required)
-    ):
-        if not endpoint:
-            raise ValueError("endpoint is required")
+    def __init__(self, config: AgentConfig):
+        self.config = config
+        self.endpoint = _normalize_endpoint(config.endpoint)
+        self.access_key = (config.api_key or "").strip()
+        self.timeout_s = 60
 
-        self.endpoint = endpoint.rstrip("/")
-        self.api_key = api_key or ""
-        self.timeout_s = timeout_s
-        self.default_model = default_model
-        self.chatbot_id = chatbot_id
+        if not self.endpoint:
+            raise ValueError("Missing agent endpoint (config.endpoint).")
+        if not self.access_key:
+            raise ValueError("Missing agent access key (config.api_key).")
 
-        self.chat_url = f"{self.endpoint}/api/v1/chat/completions"
-
-        logger.info(
-            "DigitalOceanAgentClient initialized (chat_url=%s, chatbot_id=%s)",
-            self.chat_url,
-            self.chatbot_id,
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {self.access_key}",
+                "Content-Type": "application/json",
+                "User-Agent": f"WB-IATI-Agent/{config.version}",
+            }
         )
 
-    def _headers(self) -> Dict[str, str]:
-        h = {"Content-Type": "application/json"}
-        if self.api_key:
-            h["Authorization"] = f"Bearer {self.api_key}"
-        return h
+        logger.info(
+            "DigitalOceanAgentClient initialized (endpoint=%s, version=%s)",
+            self.endpoint,
+            config.version,
+        )
 
     def chat_completions(
         self,
         messages: List[Dict[str, str]],
-        model: Optional[str] = None,
-        temperature: float = 0.2,
-        max_tokens: int = 1200,
-        stream: bool = False,
+        *,
         include_retrieval_info: bool = True,
-        include_functions_info: bool = False,
-        include_guardrails_info: bool = False,
-        extra: Optional[Dict[str, Any]] = None,
+        include_functions_info: bool = True,
+        include_guardrails_info: bool = True,
+        stream: bool = False,
+        max_retries: int = 3,
     ) -> APIResponse:
         """
-        Returns APIResponse where:
-        - data is the full JSON response from DO
-        - text is best-effort extracted assistant content (choices[0].message.content)
+        POST {endpoint}/api/v1/chat/completions
+        OpenAI-compatible response with optional "retrieval" object.
         """
-        payload: Dict[str, Any] = {
+        url = f"{self.endpoint}/api/v1/chat/completions"
+
+        payload = {
             "messages": messages,
             "stream": stream,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            # DO docs mention these toggles; if unsupported, server may ignore or reject.
             "include_retrieval_info": include_retrieval_info,
             "include_functions_info": include_functions_info,
             "include_guardrails_info": include_guardrails_info,
         }
-        if model or self.default_model:
-            payload["model"] = model or self.default_model
 
-        # Backward-compat: some older stacks used chatbot_id in payload
-        if self.chatbot_id:
-            payload["chatbot_id"] = self.chatbot_id
+        start = time.time()
+        last_err = None
 
-        if extra:
-            payload.update(extra)
-
-        t0 = time.time()
-        try:
-            r = requests.post(self.chat_url, headers=self._headers(), json=payload, timeout=self.timeout_s)
-            dt = time.time() - t0
-
-            raw_text = r.text or ""
-            data = None
+        for attempt in range(1, max_retries + 1):
             try:
-                data = r.json()
-            except Exception:
-                data = None
+                r = self.session.post(url, json=payload, timeout=self.timeout_s)
+                dt = time.time() - start
 
-            if not (200 <= r.status_code < 300):
-                logger.error("Non-retryable response %s for POST %s: %s", r.status_code, self.chat_url, raw_text[:400])
-                return APIResponse(
-                    success=False,
-                    status_code=r.status_code,
-                    data=data if isinstance(data, dict) else None,
-                    text="",
-                    error=raw_text[:600] or "Request failed",
-                    execution_time=dt,
-                    url=self.chat_url,
-                )
+                # Non-retryable (4xx except 429)
+                if 400 <= r.status_code < 500 and r.status_code != 429:
+                    logger.error("Non-retryable response %s for POST %s: %s", r.status_code, url, r.text[:500])
+                    return APIResponse(
+                        success=False,
+                        status_code=r.status_code,
+                        error=r.text,
+                        execution_time=dt,
+                    )
 
-            # Extract assistant message content
-            assistant_text = ""
-            if isinstance(data, dict):
-                try:
-                    assistant_text = data["choices"][0]["message"]["content"]
-                except Exception:
-                    assistant_text = raw_text
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                    except Exception:
+                        data = {"raw_text": r.text}
+                    return APIResponse(success=True, status_code=200, data=data, execution_time=dt)
 
-            return APIResponse(
-                success=True,
-                status_code=r.status_code,
-                data=data if isinstance(data, dict) else None,
-                text=assistant_text or raw_text,
-                error=None,
-                execution_time=dt,
-                url=self.chat_url,
-            )
+                # Retryable
+                last_err = f"HTTP {r.status_code}: {r.text[:300]}"
+                time.sleep(min(2 ** (attempt - 1), 8))
 
-        except Exception as e:
-            dt = time.time() - t0
-            logger.exception("Request failed: POST %s -> %s", self.chat_url, str(e))
-            return APIResponse(
-                success=False,
-                status_code=-1,
-                data=None,
-                text="",
-                error=str(e),
-                execution_time=dt,
-                url=self.chat_url,
-            )
+            except Exception as e:
+                last_err = str(e)
+                time.sleep(min(2 ** (attempt - 1), 8))
+
+        dt = time.time() - start
+        logger.error("Request failed after %s attempts: POST %s -> %s", max_retries, url, last_err)
+        return APIResponse(success=False, status_code=0, error=last_err, execution_time=dt)
+
+    def quick_test(self) -> Dict[str, Any]:
+        """
+        Light connectivity test.
+        """
+        resp = self.chat_completions(
+            [{"role": "user", "content": "Reply with: OK"}],
+            include_retrieval_info=False,
+            include_functions_info=False,
+            include_guardrails_info=False,
+            max_retries=2,
+        )
+        if not resp.success:
+            return {"overall_status": "failed", "error": resp.error, "status_code": resp.status_code}
+        return {"overall_status": "passed", "status_code": 200}
 
 
-# -----------------------------
-# Compatibility wrapper used by orchestrator / Streamlit
-# -----------------------------
+# ----------------------------
+# High-level interface used by app
+# ----------------------------
 class ChatbotInterface:
     """
-    Backward-compatible interface expected by main_agent_orchestrator,
-    but powered by DigitalOceanAgentClient using /api/v1/chat/completions.
+    Provides app-friendly methods:
+    - send_iati_query(): returns parsed JSON if agent returned it
+    - create_dashboard_request(): structured metrics for charts
     """
 
-    def __init__(self, config: Any):
-        self.endpoint = getattr(config, "endpoint", None) or os.environ.get("DO_ENDPOINT", "")
-        self.api_key = getattr(config, "api_key", None) or os.environ.get("DO_API_KEY", "")
-        self.chatbot_id = getattr(config, "chatbot_id", None) or os.environ.get("DO_CHATBOT_ID", None)
+    def __init__(self, config: AgentConfig):
+        self.config = config
+        self.client = DigitalOceanAgentClient(config)
 
-        self.client = DigitalOceanAgentClient(
-            endpoint=self.endpoint,
-            api_key=self.api_key,
-            chatbot_id=self.chatbot_id,
+    def initialize_session(self) -> bool:
+        # Nothing to persist server-side; keep for compatibility
+        return True
+
+    def send_iati_query(
+        self,
+        query: str,
+        *,
+        mode: str = "analysis",
+        force_json: bool = True,
+        include_retrieval_info: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Sends a user query to the DO agent and attempts to parse structured JSON.
+        """
+        system_prompt = (
+            "You are a World Bank IATI Intelligence Agent. "
+            "Prioritize grounded answers from the connected knowledge base. "
         )
 
-    async def health_check(self) -> APIResponse:
-        # No dedicated health endpoint guaranteed; do a tiny completion
-        msgs = build_messages("ping", system_prompt="Reply with 'pong'.")
-        return self.client.chat_completions(msgs, max_tokens=20, include_retrieval_info=False)
-
-    async def get_agent_capabilities(self) -> APIResponse:
-        # Not standardized; keep non-fatal in orchestrator
-        msgs = build_messages(
-            "List your capabilities as JSON with keys: tools, data_sources, limitations.",
-            system_prompt="Return only JSON.",
-        )
-        return self.client.chat_completions(msgs, max_tokens=250, include_retrieval_info=False)
-
-    async def send_query(self, query: str, context: Optional[Dict[str, Any]] = None) -> APIResponse:
-        """
-        Main method for chat. Encourage the agent to return a JSON metrics block when possible.
-        """
-        sys = (
-            "You are an executive analytics agent for World Bank IATI portfolio intelligence. "
-            "When possible, include a ```json metrics``` block with structured fields:\n"
+        json_instruction = (
+            "Return a SINGLE JSON object (no markdown) using this schema:\n"
             "{\n"
-            '  "regional_investment_by_sector": [{"Category": "...", "Value": number}],\n'
-            '  "active_projects_global": [{"Region": "...", "ActiveProjects": number, "AvgCommitmentUSDm": number}],\n'
-            '  "portfolio_trend": [{"Year": number, "InvestmentBn": number, "DisbursementBn": number}],\n'
-            '  "risk_heatmap": [{"RiskLevel":"Low|Moderate|High", "Africa": number, "Asia": number, "Europe": number, "MENA": number, "Americas": number}],\n'
-            '  "kpis": {"budget_utilized_pct": number, "impact_score": number, "risk_exposure": "Low|Moderate|High"}\n'
+            '  "executive_summary": "string",\n'
+            '  "key_metrics": [{"label":"string","value":number,"unit":"string","note":"string"}],\n'
+            '  "charts": [\n'
+            "     {\n"
+            '       "title":"string",\n'
+            '       "type":"bar|line|pie|heatmap|scatter",\n'
+            '       "x_label":"string",\n'
+            '       "y_label":"string",\n'
+            '       "data": [{"x":"string","y":number,"series":"string"}]\n'
+            "     }\n"
+            "  ],\n"
+            '  "risks": [{"risk":"string","severity":"Low|Moderate|High","evidence":"string"}],\n'
+            '  "recommendations": ["string"],\n'
+            '  "data_confidence": 0.0,\n'
+            '  "notes": "string"\n'
             "}\n"
-            "If you cannot provide numbers, explain what is missing and still provide best-effort estimates labeled as estimates."
-        )
-        user = query
-        if context:
-            user += "\n\nContext:\n" + json.dumps(context)[:4000]
-
-        msgs = build_messages(user, system_prompt=sys)
-        return self.client.chat_completions(
-            msgs,
-            temperature=0.2,
-            max_tokens=1400,
-            include_retrieval_info=True,
-            include_guardrails_info=False,
-            include_functions_info=False,
+            "If some numeric fields are not available from grounded sources, omit them or leave them null—do NOT fabricate."
         )
 
+        messages = [{"role": "system", "content": system_prompt + (json_instruction if force_json else "")}]
+        messages.append({"role": "user", "content": query})
 
-# Convenience (kept for older imports)
-async def test_connection(config: Any) -> Dict[str, Any]:
-    ci = ChatbotInterface(config)
-    resp = await ci.health_check()
-    return {
-        "overall_status": "passed" if resp.success else "failed",
-        "status_code": resp.status_code,
-        "error": resp.error,
-        "url": resp.url,
-    }
+        resp = self.client.chat_completions(
+            messages,
+            include_retrieval_info=include_retrieval_info,
+            include_functions_info=True,
+            include_guardrails_info=True,
+            stream=False,
+        )
+
+        if not resp.success:
+            return {
+                "ok": False,
+                "error": resp.error,
+                "status_code": resp.status_code,
+                "raw": resp.data,
+            }
+
+        data = resp.data or {}
+        content = ""
+        try:
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")  # OpenAI-style
+        except Exception:
+            content = ""
+
+        parsed = _extract_json_from_text(content) if force_json else None
+
+        return {
+            "ok": True,
+            "response_text": content,
+            "parsed": parsed,
+            "retrieval": data.get("retrieval"),
+            "guardrails": data.get("guardrails"),
+            "functions": data.get("functions"),
+            "raw": data,
+        }
+
+    def create_dashboard_request(self, dashboard_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Uses the agent to produce dashboard-ready structured output.
+        """
+        prompt = (
+            f"Create a {dashboard_type} portfolio dashboard using grounded IATI data where available. "
+            f"Parameters: {json.dumps(params)}. "
+            "Return JSON using the schema previously specified."
+        )
+        return self.send_iati_query(prompt, mode="dashboard", force_json=True, include_retrieval_info=True)
+
+
+def test_connection(config: AgentConfig) -> Dict[str, Any]:
+    """
+    Compatibility shim used by older orchestrator code.
+    """
+    try:
+        client = DigitalOceanAgentClient(config)
+        return client.quick_test()
+    except Exception as e:
+        return {"overall_status": "failed", "error": str(e), "status_code": 0}
