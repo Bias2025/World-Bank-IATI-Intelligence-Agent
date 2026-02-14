@@ -1,499 +1,732 @@
 # streamlit_app.py
-"""
-World Bank — IATI Intelligence Agent (Streamlit-native, client-demo ready)
-
-Fixes in this version:
-- Better, multi-color charts (teal/cyan/sky + purple accents). Heatmap has a legend/colorbar.
-- Robust async runner that DOES NOT close the Streamlit event loop (fixes "Event loop is closed").
-- Quick actions work reliably even when WBIATIIntelligenceAgent is missing methods:
-  - First try orchestrator pipeline
-  - If it fails due to missing agent methods, fallback to DO agent (chat endpoint)
-  - Always render a client-ready dashboard in the UI (so the demo never looks broken)
-- Auto-dashboard after query (optional toggle)
-- Raw JSON hidden by default (expander)
-- Masks secrets in sidebar
-"""
+# World Bank IATI Intelligence Agent — Streamlit UI (robust DO Agent integration + colorful charts)
+#
+# Key fixes:
+# - Avoids "Event loop is closed" by using synchronous requests (no aiohttp/asyncio in UI layer)
+# - Auto-discovers the DO Agent chat endpoint path (handles /chat 404s)
+# - Prevents StreamlitAPIException: session_state cannot be modified after widget instantiation
+# - Adds flexible "Quick Actions" that work for any prompt (not just portfolio overview)
+# - Improves chart styling + risk heatmap with a multi-hue colorscale + legend/colorbar
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-from pathlib import Path
-from datetime import datetime
-from typing import Any, Dict, Optional, List
+import re
+import time
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-import streamlit as st
 import pandas as pd
 import plotly.express as px
-
-from wb_iati_agent_config import get_agent_config
-from main_agent_orchestrator import WBIATIAgentOrchestrator
+import plotly.graph_objects as go
+import requests
+import streamlit as st
 
 
 # -----------------------------
-# Page + styling
+# Visual identity (cool gradients)
 # -----------------------------
-st.set_page_config(page_title="WB IATI Intelligence Agent", layout="wide")
-
-_CSS = """
-<style>
-:root{ --bg:#f7fbfc; --card:#ffffff; --muted:#6b7280; }
-html,body [data-testid="stAppViewContainer"]{ background: var(--bg); }
-.hero{
-  background: linear-gradient(90deg, #0ea5a9 0%, #38bdf8 45%, #60a5fa 100%);
-  padding: 22px 26px; border-radius: 12px; color: white;
-  box-shadow: 0 10px 25px rgba(12,38,70,0.10);
+THEME = {
+    "bg": "#F7FAFC",
+    "panel": "#FFFFFF",
+    "text": "#0B1220",
+    "muted": "#5B6B84",
+    "border": "rgba(15, 23, 42, 0.10)",
+    # Palette: Teal → Cyan → Sky Blue; Lavender → Violet → Soft Purple; Indigo → Blue-Violet
+    "teal": "#14B8A6",
+    "cyan": "#22D3EE",
+    "sky": "#38BDF8",
+    "lav": "#C4B5FD",
+    "violet": "#8B5CF6",
+    "purple": "#A78BFA",
+    "indigo": "#4F46E5",
+    "blueviolet": "#6366F1",
 }
-.hero h1{ margin:0; font-size:28px; font-weight:800; }
-.hero p{ margin:6px 0 0 0; opacity:.95; }
-.card{
-  background: var(--card); border-radius: 12px; padding: 14px 16px;
-  box-shadow: 0 8px 22px rgba(12,38,70,0.06);
-}
-.muted{ color: var(--muted); }
-.small{ font-size:.92rem; }
-hr{ border:none; border-top:1px solid rgba(15,23,42,.10); margin: 14px 0; }
-</style>
-"""
-st.markdown(_CSS, unsafe_allow_html=True)
 
+PLOTLY_QUAL_SEQ = [
+    THEME["teal"],
+    THEME["cyan"],
+    THEME["sky"],
+    THEME["lav"],
+    THEME["violet"],
+    THEME["indigo"],
+    THEME["blueviolet"],
+    THEME["purple"],
+]
 
-# -----------------------------
-# Safe async runner (Streamlit-safe, avoids closing loop)
-# -----------------------------
-def run_async_safely(coro):
-    """
-    Run coroutine safely in Streamlit:
-    - If there's a running loop, use nest_asyncio + run_until_complete (does not close loop)
-    - If no loop, fallback to asyncio.run
-    """
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = None
-
-    # No loop exists
-    if loop is None:
-        return asyncio.run(coro)
-
-    # Loop exists but is closed -> create a fresh loop
-    if loop.is_closed():
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
-        try:
-            return new_loop.run_until_complete(coro)
-        finally:
-            # Don't close here; Streamlit may reuse it
-            pass
-
-    # Loop exists and is running (Streamlit)
-    if loop.is_running():
-        import nest_asyncio
-        nest_asyncio.apply()
-        return loop.run_until_complete(coro)
-
-    # Loop exists and not running
-    return loop.run_until_complete(coro)
-
-
-# -----------------------------
-# Prompts/templates
-# -----------------------------
-PROMPT_FILE = Path("prompt_templates.json")
-
-def load_prompt_templates() -> Dict[str, Dict[str, str]]:
-    if PROMPT_FILE.exists():
-        try:
-            return json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            return {"expert_prompts": {}, "quick_actions": {}}
-    return {"expert_prompts": {}, "quick_actions": {}}
-
-
-# -----------------------------
-# Mask secrets / env display
-# -----------------------------
-def mask_value(v: Optional[str], keep_end: int = 6) -> str:
-    if not v:
-        return "Not configured"
-    if len(v) <= keep_end + 4:
-        return "****"
-    return "****" + v[-keep_end:]
-
-
-# -----------------------------
-# Cached orchestrator
-# -----------------------------
-@st.cache_resource(ttl=60 * 60)
-def get_orchestrator() -> WBIATIAgentOrchestrator:
-    cfg = get_agent_config()
-    cfg.api_key = os.environ.get("DO_API_KEY", getattr(cfg, "api_key", None))
-    cfg.endpoint = os.environ.get("DO_ENDPOINT", getattr(cfg, "endpoint", None))
-    cfg.chatbot_id = os.environ.get("DO_CHATBOT_ID", getattr(cfg, "chatbot_id", None))
-    return WBIATIAgentOrchestrator(cfg)
-
-orchestrator = get_orchestrator()
-
-
-# -----------------------------
-# Visual palette (teal/cyan/sky + lavender/purple)
-# -----------------------------
-PALETTE = ["#0ea5a9", "#38bdf8", "#60a5fa", "#8b5cf6", "#a78bfa"]  # modern cool gradient
-HEATMAP_SCALE = [
-    [0.0, "#0b1020"],   # deep
-    [0.2, "#312e81"],   # indigo
-    [0.4, "#0ea5a9"],   # teal
-    [0.6, "#38bdf8"],   # cyan
-    [0.8, "#a78bfa"],   # lavender
-    [1.0, "#ffffff"],   # light
+# A custom colorscale for heatmaps (low -> high):
+# teal -> cyan -> sky -> lavender -> violet -> indigo
+RISK_COLORSCALE = [
+    [0.00, THEME["teal"]],
+    [0.20, THEME["cyan"]],
+    [0.40, THEME["sky"]],
+    [0.60, THEME["lav"]],
+    [0.80, THEME["violet"]],
+    [1.00, THEME["indigo"]],
 ]
 
 
 # -----------------------------
-# Dashboard rendering (client-demo grade)
+# Streamlit setup + CSS
 # -----------------------------
-def render_kpi_row(kpis: List[Dict[str, Any]]):
-    cols = st.columns(min(3, max(1, len(kpis))))
-    for i, k in enumerate(kpis[:3]):
-        cols[i].metric(k.get("label", "KPI"), k.get("value", "—"), k.get("delta"))
+st.set_page_config(page_title="WB IATI Intelligence Agent", layout="wide")
 
-def render_initiatives_table():
-    st.subheader("Top 5 strategic initiatives")
-    st.table([
-        {"Initiative": "Green Energy Transition", "Lead": "PMO", "Status": "On track", "Budget (Bn USD)": 120, "Timeline": "2025–2040"},
-        {"Initiative": "Global Digital Education", "Lead": "Education GP", "Status": "On track", "Budget (Bn USD)": 80, "Timeline": "2024–2036"},
-        {"Initiative": "Pandemic Preparedness", "Lead": "Health GP", "Status": "Slight delay", "Budget (Bn USD)": 100, "Timeline": "2023–2038"},
-        {"Initiative": "Water & Sanitation for All", "Lead": "WASH GP", "Status": "New", "Budget (Bn USD)": 60, "Timeline": "2026–2045"},
-        {"Initiative": "Climate Resilience Infra", "Lead": "Infra GP", "Status": "New", "Budget (Bn USD)": 90, "Timeline": "2026–2046"},
-    ])
-
-def render_consulting_dashboard(title: str = "Global Portfolio Dashboard (Preview)"):
-    """
-    Polished dashboard with colorful charts + heatmap legend.
-    Uses placeholder data until you wire live portfolio data.
-    """
-    st.markdown(f"## {title}")
-
-    render_kpi_row([
-        {"label": "Budget Utilized", "value": "75%", "delta": "+2% QoQ"},
-        {"label": "Impact Score", "value": "4.2 / 5.0", "delta": "+0.1"},
-        {"label": "Risk Exposure", "value": "Moderate", "delta": "Stable"},
-    ])
-
-    st.markdown("<hr/>", unsafe_allow_html=True)
-
-    c1, c2 = st.columns([2, 1])
-
-    with c1:
-        st.subheader("Regional investment by sector (last 10 yrs)")
-        df = pd.DataFrame({
-            "Category": ["Africa", "Asia", "Education", "Health", "Europe", "MENA"],
-            "Value": [28, 18, 24, 19, 6, 3]
-        })
-        fig = px.bar(df, x="Category", y="Value", color="Category",
-                     color_discrete_sequence=PALETTE)
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with c2:
-        st.subheader("Active projects (global)")
-        geo = pd.DataFrame({
-            "Region": ["Africa", "Asia", "Europe", "MENA", "Americas"],
-            "Active Projects": [420, 380, 120, 90, 190]
-        })
-        fig2 = px.scatter(geo, x="Region", y="Active Projects", size="Active Projects",
-                          color="Region", color_discrete_sequence=PALETTE)
-        fig2.update_layout(showlegend=False)
-        st.plotly_chart(fig2, use_container_width=True)
-
-    st.markdown("<hr/>", unsafe_allow_html=True)
-
-    c3, c4 = st.columns([2, 1])
-
-    with c3:
-        st.subheader("Portfolio trend analysis (Bn USD)")
-        df2 = pd.DataFrame({
-            "Year": [2019, 2020, 2021, 2022, 2023, 2024],
-            "Investment": [210, 235, 250, 300, 270, 310],
-            "Disbursement": [95, 110, 135, 160, 190, 230]
-        })
-        fig3 = px.line(df2, x="Year", y=["Investment", "Disbursement"],
-                       color_discrete_sequence=PALETTE)
-        # Keep legend, it’s useful here
-        st.plotly_chart(fig3, use_container_width=True)
-
-    with c4:
-        st.subheader("Risk heatmap (portfolio)")
-        # numeric matrix (higher = more risk)
-        heat = pd.DataFrame(
-            [
-                [7, 4, 8, 12, 30, 36, 25],
-                [8, 15, 12, 12, 12, 23, 25],
-                [8, 5, 6, 15, 17, 25, 26],
-                [7, 3, 5, 15, 25, 23, 25],
-            ],
-            index=["High", "Moderate", "Low", "Stable"],
-            columns=["Geopolitical", "Economic", "Financial", "Social", "Environmental", "Operational", "Cyber"]
-        )
-        fig4 = px.imshow(
-            heat,
-            aspect="auto",
-            color_continuous_scale=HEATMAP_SCALE,
-            labels=dict(color="Risk score")
-        )
-        # ensure colorbar is visible and labeled
-        fig4.update_layout(coloraxis_colorbar=dict(title="Risk score"))
-        st.plotly_chart(fig4, use_container_width=True)
-
-    st.markdown("<hr/>", unsafe_allow_html=True)
-    render_initiatives_table()
-
-
-def render_executive_brief(summary_text: str, key_points: Optional[List[str]] = None):
-    st.markdown("### Executive summary")
-    st.info(summary_text or "Portfolio snapshot generated. See dashboard below for the client-ready view.")
-    if key_points:
-        st.markdown("**Key points**")
-        for p in key_points[:5]:
-            st.markdown(f"- {p}")
-
-
-# -----------------------------
-# Response normalization + fallback
-# -----------------------------
-def normalize_to_dict(resp: Any) -> Dict[str, Any]:
-    if resp is None:
-        return {}
-    if isinstance(resp, dict):
-        return resp
-    if hasattr(resp, "to_dict"):
-        try:
-            return resp.to_dict()
-        except Exception:
-            pass
-    if hasattr(resp, "__dict__"):
-        return vars(resp)
-    return {"raw": resp}
-
-def fallback_do_agent_query(query: str) -> Dict[str, Any]:
-    """
-    If local agent paths break due to missing methods, call the DO agent directly.
-    Avoids demo-breaking failures for quick actions.
-    """
-    try:
-        do_resp = run_async_safely(orchestrator.chatbot.send_query(query, context={"mode": "fallback"}))
-        d = normalize_to_dict(do_resp)
-        if d.get("success") is True:
-            data = d.get("data", "")
-            if isinstance(data, dict):
-                summary = data.get("summary") or data.get("executive_summary") or json.dumps(data)[:900]
-            else:
-                summary = str(data)[:1200]
-            return {"success": True, "executive_summary": summary, "raw": d}
-        return {"success": False, "error": d.get("error") or "DO agent fallback failed", "raw": d}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-# -----------------------------
-# Session state
-# -----------------------------
-if "query_text" not in st.session_state:
-    st.session_state["query_text"] = ""
-if "last_response" not in st.session_state:
-    st.session_state["last_response"] = None
-
-
-# -----------------------------
-# Header
-# -----------------------------
 st.markdown(
     f"""
-    <div class="hero">
-      <h1>World Bank — IATI Intelligence Agent</h1>
-      <p>Client-ready portfolio insights and dashboards. <span style="opacity:.85">({datetime.utcnow().strftime('%Y-%m-%d')})</span></p>
-    </div>
-    """,
+<style>
+    html, body, [class*="css"]  {{
+        background: {THEME["bg"]};
+        color: {THEME["text"]};
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }}
+    .block-container {{
+        padding-top: 1.2rem;
+        padding-bottom: 2.5rem;
+    }}
+    .app-hero {{
+        background: linear-gradient(90deg, rgba(20,184,166,0.14), rgba(34,211,238,0.12), rgba(56,189,248,0.10), rgba(139,92,246,0.10));
+        border: 1px solid {THEME["border"]};
+        border-radius: 18px;
+        padding: 18px 18px 10px 18px;
+        box-shadow: 0 10px 30px rgba(2,6,23,0.06);
+    }}
+    .card {{
+        background: {THEME["panel"]};
+        border: 1px solid {THEME["border"]};
+        border-radius: 18px;
+        padding: 16px;
+        box-shadow: 0 8px 24px rgba(2,6,23,0.06);
+    }}
+    .muted {{
+        color: {THEME["muted"]};
+    }}
+    .pill {{
+        display: inline-block;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid {THEME["border"]};
+        background: linear-gradient(90deg, rgba(99,102,241,0.12), rgba(167,139,250,0.12));
+        font-size: 12px;
+        color: {THEME["text"]};
+        margin-right: 8px;
+    }}
+    .tiny {{
+        font-size: 12px;
+    }}
+</style>
+""",
     unsafe_allow_html=True,
 )
+
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def safe_json_loads(s: str) -> Optional[Any]:
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+def extract_json_object(text: str) -> Optional[dict]:
+    """
+    Tries to extract a JSON object from a model response that includes prose + JSON.
+    """
+    if not text:
+        return None
+    # Look for the first {...} that parses.
+    candidates = re.findall(r"\{(?:[^{}]|(?R))*\}", text, flags=re.DOTALL)
+    for c in candidates:
+        obj = safe_json_loads(c)
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def coerce_number(x: Any) -> Optional[float]:
+    if x is None:
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    if isinstance(x, str):
+        s = x.strip().replace(",", "")
+        try:
+            return float(s)
+        except Exception:
+            return None
+    return None
+
+
+# -----------------------------
+# DO Agent client (sync; endpoint discovery)
+# -----------------------------
+@dataclass
+class DOAgentConfig:
+    base_url: str
+    chatbot_id: str
+    api_key: str = ""  # optional, depending on your DO Agent auth
+    timeout_s: int = 30
+
+
+class DOAgentClient:
+    """
+    Synchronous client to call DigitalOcean Agents endpoint.
+    Your logs show 404 at /capabilities and /chat, so we probe common routes.
+    """
+
+    COMMON_CHAT_PATHS = [
+        "/chat",
+        "/v1/chat",
+        "/api/chat",
+        "/agent/chat",
+        "/agents/chat",
+        "/v1/agents/chat",
+        "/v1/agent/chat",
+    ]
+
+    def __init__(self, cfg: DOAgentConfig):
+        self.cfg = cfg
+        self._resolved_chat_path: Optional[str] = None
+        self._last_probe: List[Tuple[str, int, str]] = []
+
+    def _headers(self) -> Dict[str, str]:
+        h = {"Content-Type": "application/json"}
+        if self.cfg.api_key:
+            # Adjust if your DO Agent expects a different header scheme
+            h["Authorization"] = f"Bearer {self.cfg.api_key}"
+        return h
+
+    def probe_endpoints(self) -> List[Tuple[str, int, str]]:
+        """
+        Probes a few candidate endpoints and stores results.
+        Returns list of (url, status_code, detail).
+        """
+        base = self.cfg.base_url.rstrip("/")
+        results: List[Tuple[str, int, str]] = []
+        payload = {
+            "chatbot_id": self.cfg.chatbot_id,
+            "message": "ping",
+        }
+
+        for path in self.COMMON_CHAT_PATHS:
+            url = f"{base}{path}"
+            try:
+                r = requests.post(url, headers=self._headers(), json=payload, timeout=self.cfg.timeout_s)
+                detail = ""
+                try:
+                    detail = r.text[:220]
+                except Exception:
+                    detail = ""
+                results.append((url, r.status_code, detail))
+            except Exception as e:
+                results.append((url, -1, str(e)[:220]))
+
+        self._last_probe = results
+
+        # Pick the first 2xx as resolved chat path
+        for url, status, _ in results:
+            if 200 <= status < 300:
+                self._resolved_chat_path = url.replace(base, "")
+                break
+
+        return results
+
+    def chat(self, message: str, extra: Optional[dict] = None) -> Dict[str, Any]:
+        """
+        Calls the resolved chat endpoint (or probes first if unknown).
+        Returns a dict: {ok, status, data, error, raw_text, url_used}
+        """
+        base = self.cfg.base_url.rstrip("/")
+        if not self._resolved_chat_path:
+            self.probe_endpoints()
+
+        # Fallback: try /chat as default if nothing resolved
+        path = self._resolved_chat_path or "/chat"
+        url = f"{base}{path}"
+
+        payload = {"chatbot_id": self.cfg.chatbot_id, "message": message}
+        if extra:
+            payload.update(extra)
+
+        try:
+            r = requests.post(url, headers=self._headers(), json=payload, timeout=self.cfg.timeout_s)
+            raw_text = r.text or ""
+            data = None
+            try:
+                data = r.json()
+            except Exception:
+                data = extract_json_object(raw_text)
+
+            return {
+                "ok": 200 <= r.status_code < 300,
+                "status": r.status_code,
+                "data": data,
+                "raw_text": raw_text,
+                "error": None if 200 <= r.status_code < 300 else raw_text[:400],
+                "url_used": url,
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "status": -1,
+                "data": None,
+                "raw_text": "",
+                "error": str(e),
+                "url_used": url,
+            }
+
+
+# -----------------------------
+# Local sample data (fallback)
+# -----------------------------
+def sample_portfolio_data() -> Dict[str, Any]:
+    # Replace with your real parsed/aggregated data once DO returns structured values.
+    return {
+        "regional_investment_by_sector": pd.DataFrame(
+            {
+                "Category": ["Africa", "Asia", "Education", "Health", "Europe", "MENA"],
+                "Value": [28, 18, 24, 19, 6, 3],
+            }
+        ),
+        "active_projects_global": pd.DataFrame(
+            {
+                "Region": ["Africa", "Asia", "Europe", "MENA", "Americas"],
+                "ActiveProjects": [420, 380, 120, 90, 190],
+                "AvgCommitmentUSDm": [85, 92, 64, 58, 71],
+            }
+        ),
+        "portfolio_trend": pd.DataFrame(
+            {
+                "Year": [2018, 2019, 2020, 2021, 2022, 2023],
+                "InvestmentBn": [210, 235, 250, 300, 270, 312],
+                "DisbursementBn": [160, 175, 190, 210, 205, 230],
+            }
+        ),
+        # Risk heatmap scores 0..100
+        "risk_heatmap": pd.DataFrame(
+            {
+                "RiskLevel": ["Low", "Moderate", "High"],
+                "Africa": [25, 45, 70],
+                "Asia": [20, 40, 65],
+                "Europe": [15, 30, 50],
+                "MENA": [22, 48, 72],
+                "Americas": [18, 34, 55],
+            }
+        ),
+    }
+
+
+# -----------------------------
+# Chart builders (colorful)
+# -----------------------------
+def fig_bar_regional(df: pd.DataFrame) -> go.Figure:
+    fig = px.bar(
+        df,
+        x="Category",
+        y="Value",
+        color="Category",
+        color_discrete_sequence=PLOTLY_QUAL_SEQ,
+        title="Regional investment by sector (last 10 yrs)",
+    )
+    fig.update_layout(
+        legend_title_text="Category",
+        margin=dict(l=10, r=10, t=60, b=10),
+        height=360,
+        plot_bgcolor=THEME["panel"],
+        paper_bgcolor=THEME["panel"],
+    )
+    return fig
+
+
+def fig_bubble_active_projects(df: pd.DataFrame) -> go.Figure:
+    fig = px.scatter(
+        df,
+        x="Region",
+        y="ActiveProjects",
+        size="AvgCommitmentUSDm",
+        color="Region",
+        color_discrete_sequence=PLOTLY_QUAL_SEQ,
+        title="Active projects (global)",
+        size_max=45,
+    )
+    fig.update_layout(
+        legend_title_text="Region",
+        margin=dict(l=10, r=10, t=60, b=10),
+        height=360,
+        plot_bgcolor=THEME["panel"],
+        paper_bgcolor=THEME["panel"],
+    )
+    fig.update_yaxes(title="Active projects")
+    fig.update_xaxes(title="Region")
+    return fig
+
+
+def fig_line_trend(df: pd.DataFrame) -> go.Figure:
+    # Melt for multiseries
+    m = df.melt(id_vars=["Year"], value_vars=["InvestmentBn", "DisbursementBn"], var_name="Series", value_name="BnUSD")
+    fig = px.line(
+        m,
+        x="Year",
+        y="BnUSD",
+        color="Series",
+        markers=True,
+        color_discrete_sequence=[THEME["indigo"], THEME["teal"]],
+        title="Portfolio trend analysis (Bn USD)",
+    )
+    fig.update_layout(
+        legend_title_text="Series",
+        margin=dict(l=10, r=10, t=60, b=10),
+        height=360,
+        plot_bgcolor=THEME["panel"],
+        paper_bgcolor=THEME["panel"],
+    )
+    fig.update_yaxes(title="Bn USD")
+    return fig
+
+
+def fig_risk_heatmap(df: pd.DataFrame) -> go.Figure:
+    # df format: RiskLevel + regions columns
+    risk_levels = df["RiskLevel"].tolist()
+    regions = [c for c in df.columns if c != "RiskLevel"]
+    z = df[regions].values
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=regions,
+            y=risk_levels,
+            colorscale=RISK_COLORSCALE,
+            colorbar=dict(
+                title="Risk score",
+                titleside="right",
+                tickmode="array",
+                tickvals=[0, 25, 50, 75, 100],
+                ticktext=["0", "25", "50", "75", "100"],
+                len=0.8,
+            ),
+            zmin=0,
+            zmax=100,
+            hovertemplate="Region=%{x}<br>Risk=%{y}<br>Score=%{z}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="Risk heatmap (portfolio)",
+        margin=dict(l=10, r=10, t=60, b=10),
+        height=360,
+        plot_bgcolor=THEME["panel"],
+        paper_bgcolor=THEME["panel"],
+    )
+    return fig
+
+
+# -----------------------------
+# UI state (safe patterns)
+# -----------------------------
+def init_state():
+    st.session_state.setdefault("query_text", "")
+    st.session_state.setdefault("last_result", None)
+    st.session_state.setdefault("last_backend", "Auto")
+    st.session_state.setdefault("debug", False)
+    st.session_state.setdefault("do_probe_results", [])
+    st.session_state.setdefault("do_last_call", None)
+
+
+def set_query_text(text: str):
+    # Safe: update a separate state key that is NOT the widget key.
+    st.session_state["query_text"] = text
+
+
+def clear_query():
+    st.session_state["query_text"] = ""
+
+
+init_state()
+
+
+# -----------------------------
+# App header
+# -----------------------------
+st.markdown(
+    """
+<div class="app-hero">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:16px;">
+    <div>
+      <div style="font-size:22px; font-weight:700;">🌍 World Bank IATI Intelligence Agent</div>
+      <div class="muted" style="margin-top:4px;">
+        Executive dashboards + analysis powered by your DO knowledge base (with resilient fallbacks).
+      </div>
+    </div>
+    <div>
+      <span class="pill">Teal → Cyan → Sky</span>
+      <span class="pill">Lavender → Violet</span>
+      <span class="pill">Indigo accents</span>
+    </div>
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
 st.write("")
 
 
 # -----------------------------
-# Sidebar
+# Sidebar: DO config + controls
 # -----------------------------
 with st.sidebar:
-    st.markdown("### Environment")
-    st.markdown(f"- **Endpoint:** {mask_value(os.environ.get('DO_ENDPOINT'))}")
-    st.markdown(f"- **Chatbot ID:** {mask_value(os.environ.get('DO_CHATBOT_ID'))}")
-    st.markdown(f"- **API key present:** {'✅' if bool(os.environ.get('DO_API_KEY')) else '❌'}")
+    st.markdown("### ⚙️ Settings")
+
+    default_base = os.environ.get("DO_AGENT_ENDPOINT", "https://mrngtcmmhzbbdopptwzoirop.agents.do-ai.run")
+    default_chatbot = os.environ.get("DO_AGENT_CHATBOT_ID", "1FV8wQ78ZHOndsmrfmaNXmjpxi-snRAW")
+    default_key = os.environ.get("DO_AGENT_API_KEY", "")
+
+    base_url = st.text_input("DO Agent base URL", value=default_base)
+    chatbot_id = st.text_input("Chatbot ID", value=default_chatbot)
+    api_key = st.text_input("API Key (optional)", value=default_key, type="password")
+
+    backend = st.selectbox("Backend", ["Auto", "DO knowledge base", "Local fallback"], index=0)
+    st.session_state["last_backend"] = backend
+
+    st.session_state["debug"] = st.toggle("Debug mode", value=st.session_state["debug"])
+
+    st.write("")
+    if st.button("🔌 Probe DO endpoints"):
+        client = DOAgentClient(DOAgentConfig(base_url=base_url, chatbot_id=chatbot_id, api_key=api_key))
+        st.session_state["do_probe_results"] = client.probe_endpoints()
+
+    if st.session_state["do_probe_results"]:
+        st.markdown("**Probe results**")
+        for url, status, detail in st.session_state["do_probe_results"]:
+            badge = "✅" if 200 <= status < 300 else ("⚠️" if status == -1 else "❌")
+            st.caption(f"{badge} {status} — {url}")
+            if st.session_state["debug"] and detail:
+                st.code(detail, language="text")
+
+    st.write("")
     st.markdown("---")
-    auto_run_actions = st.toggle("Auto-run when selecting a quick action", value=False)
-    auto_dashboard = st.toggle("Auto-generate dashboard after query", value=True)
-    st.caption("Secrets are masked. Configure in Streamlit Cloud → Settings → Secrets.")
+    st.markdown(
+        "<div class='tiny muted'>Tip: If DO returns 404 on <code>/chat</code>, the correct route is likely different; probing helps you discover it.</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # -----------------------------
-# Main layout
+# Query execution
 # -----------------------------
-left, right = st.columns([3, 1])
+def run_query_via_do(message: str) -> Dict[str, Any]:
+    client = DOAgentClient(DOAgentConfig(base_url=base_url, chatbot_id=chatbot_id, api_key=api_key))
+    result = client.chat(message)
+    st.session_state["do_last_call"] = result
+    return result
 
-with right:
+
+def run_query_auto(message: str) -> Dict[str, Any]:
+    # 1) Try DO
+    do_res = run_query_via_do(message)
+    if do_res.get("ok"):
+        return {"source": "DO", "payload": do_res}
+
+    # 2) Fallback
+    return {"source": "LOCAL", "payload": {"ok": True, "data": None, "raw_text": "", "error": do_res.get("error")}}
+
+
+def execute(message: str) -> Dict[str, Any]:
+    if backend == "DO knowledge base":
+        return {"source": "DO", "payload": run_query_via_do(message)}
+    if backend == "Local fallback":
+        return {"source": "LOCAL", "payload": {"ok": True, "data": None, "raw_text": ""}}
+    return run_query_auto(message)
+
+
+# -----------------------------
+# Quick Actions (generic)
+# -----------------------------
+QUICK_ACTIONS: List[Tuple[str, str]] = [
+    ("📊 Portfolio overview", "Analyze the overall World Bank portfolio performance including disbursement efficiency, sector distribution, regional allocation, and key risks. Return structured metrics if possible."),
+    ("🧭 Geographic analysis", "From the World Bank IATI project data, analyze geographic patterns and regional distribution of commitments and disbursements. Provide regional totals and top countries."),
+    ("🏷 Sector analysis", "Based on the World Bank IATI project data, analyze commitments by sector and identify the top sectors, growth sectors, and underfunded sectors. Provide totals and percentages."),
+    ("📈 Trend analysis", "Conduct a trend analysis of commitments and disbursements over time (at least 5 years). Identify inflection points and explain likely drivers."),
+    ("🧯 Risk assessment", "Perform a portfolio risk assessment identifying concentration risks, implementation challenges, disbursement delays, and thematic exposure. Return a risk matrix by region and risk level if possible."),
+    ("⚡ Custom action (explain + extract numbers)", "Answer the question, then provide a JSON object with any extracted numeric metrics under keys: totals, by_region, by_sector, trend, risks."),
+]
+
+
+# -----------------------------
+# Main layout tabs
+# -----------------------------
+tab_dashboard, tab_chat, tab_debug = st.tabs(["📊 Dashboard", "💬 Ask / Quick Actions", "🧪 Debug"])
+
+with tab_chat:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.subheader("Agent status")
-    try:
-        status = orchestrator.get_agent_status()
-        st.json({
-            "name": status.get("agent_info", {}).get("name", "World Bank IATI Intelligence Agent"),
-            "version": status.get("agent_info", {}).get("version", "1.0.0"),
-            "initialized": status.get("agent_info", {}).get("initialized", False),
-            "endpoint": mask_value(getattr(orchestrator.config, "endpoint", None))
-        })
-    except Exception:
-        st.json({"name": "World Bank IATI Intelligence Agent", "initialized": False})
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("#### Quick Actions")
 
-with left:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.subheader("Chat / Query")
-    st.caption("Use templates or quick actions. The app will always render a client-ready dashboard view.")
+    cols = st.columns(3)
+    for i, (label, prompt) in enumerate(QUICK_ACTIONS):
+        with cols[i % 3]:
+            if st.button(label, use_container_width=True):
+                set_query_text(prompt)
 
-    prompts = load_prompt_templates()
-    expert_prompts = prompts.get("expert_prompts", {}) or {}
-    quick_actions = prompts.get("quick_actions", {}) or {}
+    st.write("")
+    st.markdown("#### Ask the agent")
 
-    # Expert templates
-    if expert_prompts:
-        chosen = st.selectbox(
-            "Expert templates",
-            options=[""] + list(expert_prompts.keys()),
-            format_func=lambda k: "— select a template —" if k == "" else k.replace("_", " ").title()
-        )
-        if chosen:
-            st.code(expert_prompts[chosen], language="text")
-            if st.button("Use template"):
-                st.session_state["query_text"] = expert_prompts[chosen]
-                if auto_run_actions:
-                    st.experimental_rerun()
+    # Widget key is fixed; we do NOT assign to st.session_state["query_input"] after creation.
+    query = st.text_area(
+        "Enter your request",
+        value=st.session_state["query_text"],
+        height=140,
+        key="query_input_widget",
+        placeholder="E.g., 'Show commitments and disbursements by region for the last 5 years, and highlight bottlenecks.'",
+    )
 
-    # Quick actions buttons
-    if quick_actions:
-        st.markdown("**Quick actions**")
-        qa_items = list(quick_actions.items())
-        cols = st.columns(min(3, max(1, len(qa_items))))
-        for i, (k, v) in enumerate(qa_items):
-            if cols[i % len(cols)].button(k.replace("_", " ").title()):
-                st.session_state["query_text"] = v
-                if auto_run_actions:
-                    st.experimental_rerun()
-
-    query = st.text_area("Enter your natural language query", height=160, value=st.session_state["query_text"])
-
-    b1, b2, b3 = st.columns([1, 1, 1])
-    run_btn = b1.button("Run Query")
-    dash_btn = b2.button("Create Executive Dashboard")
-    clear_btn = b3.button("Clear")
+    action_cols = st.columns([1, 1, 3])
+    with action_cols[0]:
+        run_btn = st.button("Run", type="primary", use_container_width=True)
+    with action_cols[1]:
+        clear_btn = st.button("Clear", use_container_width=True)
 
     if clear_btn:
-        st.session_state["query_text"] = ""
-        st.session_state["last_response"] = None
+        clear_query()
         st.experimental_rerun()
 
-    def execute_query(q: str) -> Dict[str, Any]:
-        """
-        Try orchestrator first. If it fails due to missing agent methods, fallback to DO agent.
-        This keeps sector analysis / geo insights / trend analysis usable in the demo right now.
-        """
-        try:
-            resp = run_async_safely(orchestrator.process_user_query(q))
-            d = normalize_to_dict(resp)
-            if d.get("error") is True:
-                raise Exception(d.get("message") or "Orchestrator error")
-            return {"success": True, "payload": d, "source": "orchestrator"}
-        except Exception as e:
-            msg = str(e)
-
-            # Known missing-method failures from WBIATIIntelligenceAgent
-            known_missing = any(s in msg for s in [
-                "_analyze_trends",
-                "_analyze_sector_data",
-                "_analyze_geographic_data",
-                "_general_analysis",
-                "_execute_analysis"
-            ])
-
-            if known_missing or "AttributeError" in msg:
-                fb = fallback_do_agent_query(q)
-                if fb.get("success"):
-                    return {
-                        "success": True,
-                        "payload": {
-                            "executive_summary": fb.get("executive_summary", ""),
-                            "key_insights": [],
-                            "recommendations": [],
-                            "enhanced": True,
-                            "source": "do_agent_fallback",
-                            "raw_do_agent": fb.get("raw", {})
-                        },
-                        "source": "do_agent_fallback"
-                    }
-                return {"success": False, "error": fb.get("error", msg), "source": "do_agent_fallback"}
-
-            return {"success": False, "error": msg, "source": "orchestrator"}
-
     if run_btn:
-        if not query.strip():
-            st.warning("Please enter a query.")
-        else:
-            with st.spinner("Processing query..."):
-                out = execute_query(query.strip())
+        set_query_text(query)
+        with st.spinner("Running query..."):
+            t0 = _now_ms()
+            res = execute(query)
+            t1 = _now_ms()
+        st.session_state["last_result"] = {"query": query, "result": res, "ms": (t1 - t0)}
 
-            if not out.get("success"):
-                st.error(f"Query failed: {out.get('error')}")
+    # Show last result
+    if st.session_state["last_result"]:
+        lr = st.session_state["last_result"]
+        st.write("")
+        st.markdown("---")
+        st.markdown(f"**Backend used:** `{lr['result']['source']}`  ·  **Time:** `{lr['ms']} ms`")
+        payload = lr["result"]["payload"]
+
+        if lr["result"]["source"] == "DO":
+            if not payload.get("ok"):
+                st.error(f"DO call failed (status={payload.get('status')}): {payload.get('error')}")
+                st.caption(f"URL used: {payload.get('url_used')}")
             else:
-                result = out["payload"]
-                st.session_state["last_response"] = result
-                st.success(f"Query processed ({out.get('source')})")
+                # Best-effort: show a clean answer
+                data = payload.get("data")
+                raw = payload.get("raw_text", "")
 
-                summary_text = result.get("executive_summary") or "Portfolio snapshot generated."
-                key_pts = []
-                if isinstance(result.get("key_insights"), list):
-                    for it in result["key_insights"][:5]:
-                        if isinstance(it, dict):
-                            key_pts.append(f"{it.get('title','Insight')}: {it.get('finding','')}")
-                        else:
-                            key_pts.append(str(it))
+                if isinstance(data, dict):
+                    # Common response shapes: {"response": "..."} or {"message": "..."} etc.
+                    text = (
+                        data.get("response")
+                        or data.get("answer")
+                        or data.get("message")
+                        or data.get("output")
+                        or None
+                    )
+                    if isinstance(text, str) and text.strip():
+                        st.markdown(text)
+                    else:
+                        # If dict but no obvious text field, show it
+                        st.json(data)
+                else:
+                    # Fallback to raw text
+                    st.markdown(raw if raw else "_(No content returned)_")
 
-                render_executive_brief(summary_text, key_pts)
-
-                if auto_dashboard:
-                    st.markdown("### Client-ready dashboard")
-                    render_consulting_dashboard("Global Portfolio Dashboard (Preview)")
-
-                with st.expander("Raw response (JSON)"):
-                    st.json(result)
-
-    if dash_btn:
-        st.success("Dashboard ready")
-        render_consulting_dashboard("Global Portfolio Dashboard (Preview)")
-        # Optionally expose dashboard JSON if your orchestrator supports it without failing
-        try:
-            dash_cfg = run_async_safely(
-                orchestrator.create_executive_dashboard(
-                    "executive",
-                    parameters={},
-                    title="Global Portfolio Dashboard",
-                    context={"source_query": query.strip(), "style": "consulting"}
-                )
+        else:
+            st.warning(
+                "Using local fallback data because DO did not return a usable response. "
+                "Fix the DO endpoint route (probe in sidebar) to use real knowledge base data."
             )
-            dash_cfg = normalize_to_dict(dash_cfg)
-            if isinstance(dash_cfg, dict) and not dash_cfg.get("error"):
-                with st.expander("Raw dashboard JSON"):
-                    st.json(dash_cfg)
-        except Exception:
-            pass
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-st.caption("Built with care — treat model outputs as advisory. Sanitize before operational use.")
+
+with tab_dashboard:
+    # For dashboard: attempt to use DO response first; if not, use fallback dataset.
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("#### Executive dashboard")
+
+    st.caption(
+        "Charts are generated from real DO knowledge base responses **if structured metrics are returned**; "
+        "otherwise a local sample dataset is used as a placeholder."
+    )
+
+    # Try to derive structured metrics from last DO call, else fallback
+    structured = None
+    if st.session_state.get("do_last_call") and st.session_state["do_last_call"].get("ok"):
+        data = st.session_state["do_last_call"].get("data")
+        raw = st.session_state["do_last_call"].get("raw_text") or ""
+        if isinstance(data, dict):
+            structured = data.get("metrics") or data.get("data") or extract_json_object(raw)
+
+    # Build dashboard dataset
+    dataset = sample_portfolio_data()
+
+    # If you later standardize DO output into a schema, map it here:
+    # Example expected schema:
+    # structured = {
+    #   "regional_investment_by_sector": [{"Category":"Africa","Value":123}, ...],
+    #   "active_projects_global": [{"Region":"Africa","ActiveProjects":420,"AvgCommitmentUSDm":85}, ...],
+    #   "portfolio_trend": [{"Year":2020,"InvestmentBn":250,"DisbursementBn":190}, ...],
+    #   "risk_heatmap": [{"RiskLevel":"Low","Africa":25,...}, ...]
+    # }
+    if isinstance(structured, dict):
+        try:
+            if "regional_investment_by_sector" in structured:
+                dataset["regional_investment_by_sector"] = pd.DataFrame(structured["regional_investment_by_sector"])
+            if "active_projects_global" in structured:
+                dataset["active_projects_global"] = pd.DataFrame(structured["active_projects_global"])
+            if "portfolio_trend" in structured:
+                dataset["portfolio_trend"] = pd.DataFrame(structured["portfolio_trend"])
+            if "risk_heatmap" in structured:
+                dataset["risk_heatmap"] = pd.DataFrame(structured["risk_heatmap"])
+        except Exception:
+            # Keep sample fallback if mapping fails
+            pass
+
+    # Layout: 2x2
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(fig_bar_regional(dataset["regional_investment_by_sector"]), use_container_width=True)
+    with c2:
+        st.plotly_chart(fig_bubble_active_projects(dataset["active_projects_global"]), use_container_width=True)
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.plotly_chart(fig_line_trend(dataset["portfolio_trend"]), use_container_width=True)
+    with c4:
+        # Risk heatmap now colorful + legend/colorbar (not “blue all through”)
+        st.plotly_chart(fig_risk_heatmap(dataset["risk_heatmap"]), use_container_width=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+with tab_debug:
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("#### Debug & Diagnostics")
+
+    st.markdown(
+        "- Your logs show **404 on `/chat`** and **404 on `/capabilities`**, plus an earlier **event loop closed** failure. "
+        "This UI avoids async loops and includes endpoint probing to locate the correct chat route."
+    )
+
+    st.write("")
+    st.markdown("**Last DO call**")
+    if st.session_state.get("do_last_call"):
+        st.json(st.session_state["do_last_call"])
+    else:
+        st.info("No DO calls yet. Run a query from the Ask tab, or probe endpoints in the sidebar.")
+
+    st.write("")
+    st.markdown("**Last app result**")
+    if st.session_state.get("last_result"):
+        st.json(st.session_state["last_result"])
+    else:
+        st.info("No app results yet.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
