@@ -1,7 +1,11 @@
+# main_agent_orchestrator.py
 """
 World Bank IATI Intelligence Agent - Main Orchestrator
 Enterprise-grade orchestration layer for the complete agent system
+Streamlit-safe: NO asyncio.run() inside module code paths.
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
@@ -10,46 +14,10 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import logging
 
-# ---- async helper (paste near top of main_agent_orchestrator.py, after other imports) ----
-import asyncio
-try:
-    import nest_asyncio
-except Exception:
-    nest_asyncio = None
-
-def run_async_safely(coro):
-    """
-    Run an async coroutine from synchronous code safely in environments
-    where an event loop may already be running (Streamlit).
-    Usage: result = run_async_safely(orchestrator.initialize())
-    """
-    try:
-        # Normal case when no loop is running
-        return run_async_safely.run(coro)
-    except RuntimeError:
-        # Event loop already running (Streamlit). Patch with nest_asyncio if available.
-        if nest_asyncio:
-            nest_asyncio.apply()
-            return run_async_safely.run(coro)
-        # As a last resort, use asyncio.get_event_loop().create_task and wait for completion synchronously.
-        loop = asyncio.get_event_loop()
-        future = asyncio.ensure_future(coro, loop=loop)
-        # Wait for future completion in a blocking way (not ideal, but safe fallback)
-        # We poll until done to avoid illegal run_until_complete on running loop.
-        while not future.done():
-            # allow other tasks to run briefly
-            loop.call_soon(lambda: None)
-            # small sleep to avoid busy loop
-            import time
-            time.sleep(0.01)
-        return future.result()
-# -----------------------------------------------------------------------------------------
-
-
 # Import all agent components
 from wb_iati_agent_config import AgentConfig, get_agent_config
 from wb_iati_intelligence_agent import WBIATIIntelligenceAgent
-from do_api_integration import ChatbotInterface, test_connection
+from do_api_integration import ChatbotInterface  # compatibility alias points to DigitalOceanAPI
 from dashboard_framework import (
     ExecutiveDashboardBuilder, SectorDashboardBuilder,
     CountryDashboardBuilder, ThematicDashboardBuilder,
@@ -67,6 +35,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def _safe_get(d: Any, key: str, default=None):
+    """Helper to safely read dict-like or object attributes."""
+    if d is None:
+        return default
+    if isinstance(d, dict):
+        return d.get(key, default)
+    if hasattr(d, "get"):
+        try:
+            return d.get(key, default)
+        except Exception:
+            pass
+    if hasattr(d, key):
+        return getattr(d, key)
+    return default
+
+
 class WBIATIAgentOrchestrator:
     """
     Main orchestrator for the World Bank IATI Intelligence Agent
@@ -75,9 +60,12 @@ class WBIATIAgentOrchestrator:
 
     def __init__(self, config: AgentConfig = None):
         self.config = config or get_agent_config()
+
+        # Core components
         self.agent = WBIATIIntelligenceAgent(self.config)
-        self.chatbot = ChatbotInterface(self.config)
+        self.chatbot = ChatbotInterface(self.config)  # DigitalOceanAPI-compatible client
         self.analytics = AdvancedQueryProcessor()
+
         self.is_initialized = False
 
         # Performance tracking
@@ -89,61 +77,61 @@ class WBIATIAgentOrchestrator:
             "session_start": datetime.now()
         }
 
-        logger.info(f"🚀 WB IATI Intelligence Agent Orchestrator initialized")
+        logger.info("🚀 WB IATI Intelligence Agent Orchestrator initialized")
 
     async def initialize(self) -> bool:
-        """Initialize all agent components and validate readiness"""
-
+        """Initialize all agent components and validate readiness (Streamlit-safe)."""
         logger.info("🔧 Initializing agent components...")
 
         try:
-            # Test Digital Ocean API connection
+            # 1) Test API connection (health check)
             logger.info("  1. Testing API connection...")
-            connection_result = await test_connection(self.config)
+            health = await self.chatbot.health_check()
 
-            if connection_result["overall_status"] != "passed":
-                logger.error("❌ API connection test failed")
+            # health may be APIResponse or dict-like; normalize
+            ok = _safe_get(health, "success", False)
+            if not ok:
+                err = _safe_get(health, "error", "Unknown health check error")
+                logger.error(f"❌ API connection test failed: {err}")
                 return False
 
-            # Initialize chatbot session
-            logger.info("  2. Initializing chatbot interface...")
-            chatbot_ready = await self.chatbot.initialize_session()
+            # 2) Optional: fetch capabilities (non-fatal)
+            logger.info("  2. Fetching agent capabilities (optional)...")
+            try:
+                caps = await self.chatbot.get_agent_capabilities()
+                if _safe_get(caps, "success", False):
+                    logger.info("     ✅ Capabilities available")
+                else:
+                    logger.warning("     ⚠️ Capabilities not available (continuing)")
+            except Exception as e:
+                logger.warning(f"     ⚠️ Capabilities check failed (continuing): {e}")
 
-            if not chatbot_ready:
-                logger.error("❌ Chatbot initialization failed")
-                return False
-
-            # Validate dashboard templates
+            # 3) Validate dashboard templates (local)
             logger.info("  3. Validating dashboard templates...")
             sample_dashboards = create_sample_dashboards()
             logger.info(f"     ✅ {len(sample_dashboards)} dashboard templates ready")
 
-            # Test analytics pipeline
+            # 4) Test analytics pipeline (non-fatal if query parsing is limited)
             logger.info("  4. Testing analytics pipeline...")
             test_query = "What is the World Bank portfolio overview?"
             parsed = self.analytics.parse_complex_query(test_query)
-            logger.info(f"     ✅ Query processing validated: {parsed['query_type']}")
+
+            qt = parsed.get("query_type") if isinstance(parsed, dict) else None
+            logger.info(f"     ✅ Query processing validated: {qt or 'ok'}")
 
             self.is_initialized = True
             logger.info("✅ All components initialized successfully")
             return True
 
         except Exception as e:
-            logger.error(f"❌ Initialization failed: {e}")
+            logger.error(f"❌ Initialization failed: {e}", exc_info=True)
             return False
 
     async def process_user_query(self, query: str, user_context: Dict = None) -> Dict[str, Any]:
         """
         Process user query through the complete intelligence pipeline
-
-        Args:
-            query (str): Natural language query from user
-            user_context (Dict): Optional user context and preferences
-
-        Returns:
-            Dict: Complete analysis response with insights and visualizations
+        Returns a dict response for Streamlit UI.
         """
-
         if not self.is_initialized:
             await self.initialize()
 
@@ -153,18 +141,19 @@ class WBIATIAgentOrchestrator:
         try:
             # Step 1: Parse query using advanced analytics
             parsed_query = self.analytics.parse_complex_query(query)
-            logger.info(f"  📊 Query type: {parsed_query['query_type']}")
+            query_type = parsed_query.get("query_type", "analysis") if isinstance(parsed_query, dict) else "analysis"
+            logger.info(f"  📊 Query type: {query_type}")
 
             # Step 2: Route to appropriate analysis method
-            if parsed_query["query_type"] == "dashboard_request":
+            if query_type == "dashboard_request":
                 result = await self._handle_dashboard_request(query, parsed_query, user_context)
             else:
                 result = await self._handle_analytical_query(query, parsed_query, user_context)
 
-            # Step 3: Send to Digital Ocean agent for knowledge enhancement
+            # Step 3: Enhance with DO agent if possible
             enhanced_result = await self._enhance_with_do_agent(query, result)
 
-            # Step 4: Generate executive summary and recommendations
+            # Step 4: Generate executive wrapper response
             final_response = self._create_executive_response(query, enhanced_result, parsed_query)
 
             # Update session statistics
@@ -176,75 +165,94 @@ class WBIATIAgentOrchestrator:
 
         except Exception as e:
             execution_time = time.time() - start_time
-            logger.error(f"❌ Query processing failed: {e}")
+            logger.error(f"❌ Query processing failed: {e}", exc_info=True)
             return self._create_error_response(str(e), query, execution_time)
 
-    async def create_executive_dashboard(self, dashboard_type: str, parameters: Dict = None) -> Dict[str, Any]:
-        """Create executive dashboard with live data integration"""
-
+    async def create_executive_dashboard(self, dashboard_type: str, parameters: Dict = None, title: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Create executive dashboard with optional remote enrichment."""
         logger.info(f"📊 Creating {dashboard_type} dashboard...")
 
         try:
+            parameters = parameters or {}
+            context = context or {}
+
             # Generate dashboard configuration
             if dashboard_type == "executive":
                 dashboard = ExecutiveDashboardBuilder.create_portfolio_overview()
             elif dashboard_type == "sector":
-                sector = parameters.get("sector", "Education") if parameters else "Education"
+                sector = parameters.get("sector", "Education")
                 dashboard = SectorDashboardBuilder.create_sector_analysis(sector)
             elif dashboard_type == "country":
-                country = parameters.get("country", "India") if parameters else "India"
+                country = parameters.get("country", "India")
                 dashboard = CountryDashboardBuilder.create_country_portfolio(country)
             elif dashboard_type == "climate":
                 dashboard = ThematicDashboardBuilder.create_climate_dashboard()
             else:
                 raise ValueError(f"Unknown dashboard type: {dashboard_type}")
 
+            if title:
+                dashboard.title = title
+
             # Export to multiple formats
             json_config = DashboardExporter.export_to_json(dashboard)
             powerbi_config = DashboardExporter.export_to_powerbi(dashboard)
 
-            # Request dashboard creation through DO agent
-            dashboard_result = await self.chatbot.create_dashboard_request(dashboard_type, parameters or {})
+            # Optional: ask remote agent to enrich / validate dashboard request
+            do_agent_response = None
+            try:
+                # If your DigitalOcean agent doesn't support dashboard generation endpoints,
+                # this will fail gracefully and we’ll still return local configs.
+                # The old code called `create_dashboard_request`; we avoid assuming it exists.
+                if hasattr(self.chatbot, "send_query"):
+                    do_agent_response = await self.chatbot.send_query(
+                        f"Create a {dashboard_type} dashboard. Context: {json.dumps(context)[:4000]}",
+                        context={"dashboard_type": dashboard_type, "parameters": parameters, "context": context}
+                    )
+            except Exception as e:
+                logger.warning(f"DO agent dashboard enrichment failed (continuing): {e}")
 
             self.session_stats["dashboards_created"] += 1
 
             return {
-                "dashboard_id": dashboard.dashboard_id,
-                "title": dashboard.title,
-                "components": len(dashboard.components),
+                "dashboard_id": getattr(dashboard, "dashboard_id", f"dash_{int(time.time())}"),
+                "title": getattr(dashboard, "title", title or "Dashboard"),
+                "components": len(getattr(dashboard, "components", [])),
                 "status": "created",
                 "configurations": {
                     "json": json_config,
                     "powerbi": powerbi_config
                 },
-                "do_agent_response": dashboard_result,
+                "do_agent_response": do_agent_response.to_dict() if hasattr(do_agent_response, "to_dict") else (do_agent_response if isinstance(do_agent_response, dict) else None),
                 "metadata": {
                     "creation_time": datetime.now().isoformat(),
-                    "refresh_interval": dashboard.refresh_interval,
-                    "permissions": dashboard.permissions
+                    "refresh_interval": getattr(dashboard, "refresh_interval", None),
+                    "permissions": getattr(dashboard, "permissions", None)
                 }
             }
 
         except Exception as e:
-            logger.error(f"❌ Dashboard creation failed: {e}")
+            logger.error(f"❌ Dashboard creation failed: {e}", exc_info=True)
             return {"error": str(e), "dashboard_type": dashboard_type}
 
     def get_agent_status(self) -> Dict[str, Any]:
-        """Get comprehensive agent status and performance metrics"""
-
+        """Get comprehensive agent status and performance metrics."""
         uptime = datetime.now() - self.session_stats["session_start"]
+
+        # Never leak secrets here; UI can mask values if needed.
+        endpoint = getattr(self.config, "endpoint", None)
+        chatbot_id = getattr(self.config, "chatbot_id", None)
 
         return {
             "agent_info": {
-                "name": self.config.agent_name,
-                "version": self.config.version,
+                "name": getattr(self.config, "agent_name", "World Bank IATI Intelligence Agent"),
+                "version": getattr(self.config, "version", "1.0.0"),
                 "initialized": self.is_initialized,
                 "uptime_seconds": uptime.total_seconds()
             },
             "api_config": {
-                "endpoint": self.config.endpoint,
-                "chatbot_id": self.config.chatbot_id,
-                "data_coverage": self.config.data_coverage
+                "endpoint": endpoint,
+                "chatbot_id": chatbot_id,
+                "data_coverage": getattr(self.config, "data_coverage", None)
             },
             "session_stats": self.session_stats,
             "capabilities": {
@@ -255,85 +263,82 @@ class WBIATIAgentOrchestrator:
                 "executive_insights": True,
                 "multi_format_export": True
             },
-            "data_sources": self.config.data_sources
+            "data_sources": getattr(self.config, "data_sources", [])
         }
 
     async def _handle_analytical_query(self, query: str, parsed_query: Dict, user_context: Dict = None) -> Dict[str, Any]:
-        """Handle analytical queries through the intelligence agent"""
-
-        # Process through main agent
+        """Handle analytical queries through the intelligence agent."""
         agent_result = await self.agent.process_query(query, user_context)
 
-        # Enhance with advanced analytics if needed
-        if "trend" in parsed_query.get("intent", {}).get("analytical_methods", []):
-            # Add trend analysis
-            logger.info("  📈 Adding trend analysis...")
-            # In real implementation, this would analyze actual data
-
-        if "anomaly_detection" in parsed_query.get("intent", {}).get("analytical_methods", []):
-            # Add anomaly detection
-            logger.info("  🚨 Adding anomaly detection...")
-            # In real implementation, this would detect anomalies
+        # Optional stubs for additional analytics methods
+        methods = parsed_query.get("intent", {}).get("analytical_methods", []) if isinstance(parsed_query, dict) else []
+        if "trend" in methods:
+            logger.info("  📈 Trend analysis requested (stub).")
+        if "anomaly_detection" in methods:
+            logger.info("  🚨 Anomaly detection requested (stub).")
 
         return agent_result
 
     async def _handle_dashboard_request(self, query: str, parsed_query: Dict, user_context: Dict = None) -> Dict[str, Any]:
-        """Handle dashboard creation requests"""
+        """Handle dashboard creation requests."""
+        dashboard_type = "executive"
+        parameters: Dict[str, Any] = {}
 
-        # Extract dashboard parameters from query
-        dashboard_type = "executive"  # Default
-        parameters = {}
+        entities = parsed_query.get("entities", {}) if isinstance(parsed_query, dict) else {}
+        sectors = entities.get("sectors", []) if isinstance(entities, dict) else []
+        countries = entities.get("countries", []) if isinstance(entities, dict) else []
 
-        if "sector" in parsed_query.get("entities", {}).get("sectors", []):
+        if sectors:
             dashboard_type = "sector"
-            parameters["sector"] = parsed_query["entities"]["sectors"][0]
-        elif "country" in parsed_query.get("entities", {}).get("countries", []):
+            parameters["sector"] = sectors[0]
+        elif countries:
             dashboard_type = "country"
-            parameters["country"] = parsed_query["entities"]["countries"][0]
+            parameters["country"] = countries[0]
 
         return await self.create_executive_dashboard(dashboard_type, parameters)
 
     async def _enhance_with_do_agent(self, query: str, initial_result: Dict) -> Dict[str, Any]:
-        """Enhance results using Digital Ocean agent knowledge"""
-
+        """Enhance results using Digital Ocean agent knowledge (safe, optional)."""
         try:
-            # Send query to DO agent with context
             context = {
-                "initial_analysis": initial_result.get("summary", ""),
-                "data_points": initial_result.get("key_metrics", {}),
+                "initial_analysis": initial_result.get("summary", "") if isinstance(initial_result, dict) else "",
+                "data_points": initial_result.get("key_metrics", {}) if isinstance(initial_result, dict) else {},
                 "request_type": "enhancement"
             }
 
-            do_response = await self.chatbot.send_iati_query(query, include_visualizations=True)
+            # Use send_query which exists in DigitalOceanAPI replacement
+            do_resp = await self.chatbot.send_query(query, context=context)
 
-            if "response" in do_response:
+            if _safe_get(do_resp, "success", False):
                 return {
-                    **initial_result,
-                    "do_agent_insights": do_response["response"],
+                    **(initial_result if isinstance(initial_result, dict) else {"raw": initial_result}),
+                    "do_agent_insights": _safe_get(do_resp, "data", {}),
                     "enhanced": True,
-                    "enhancement_metadata": do_response["metadata"]
+                    "enhancement_metadata": {
+                        "status_code": _safe_get(do_resp, "status_code", None),
+                        "execution_time": _safe_get(do_resp, "execution_time", None),
+                    }
                 }
-            else:
-                logger.warning("DO agent enhancement failed, returning original result")
-                return {**initial_result, "enhanced": False}
+
+            logger.warning("DO agent enhancement failed, returning original result")
+            return {**(initial_result if isinstance(initial_result, dict) else {"raw": initial_result}), "enhanced": False}
 
         except Exception as e:
             logger.warning(f"DO agent enhancement error: {e}")
-            return {**initial_result, "enhanced": False, "enhancement_error": str(e)}
+            return {**(initial_result if isinstance(initial_result, dict) else {"raw": initial_result}), "enhanced": False, "enhancement_error": str(e)}
 
     def _create_executive_response(self, query: str, result: Dict, parsed_query: Dict) -> Dict[str, Any]:
-        """Create executive-level response with insights and recommendations"""
-
-        response = {
+        """Create executive-level response with insights and recommendations."""
+        return {
             "query": query,
             "response_timestamp": datetime.now().isoformat(),
-            "agent_version": self.config.version,
-            "query_classification": parsed_query["query_type"],
-            "confidence": result.get("confidence", 0.95),
-            "executive_summary": self._generate_executive_summary(result),
+            "agent_version": getattr(self.config, "version", "1.0.0"),
+            "query_classification": parsed_query.get("query_type") if isinstance(parsed_query, dict) else "analysis",
+            "confidence": result.get("confidence", 0.85) if isinstance(result, dict) else 0.75,
+            "executive_summary": self._generate_executive_summary(result if isinstance(result, dict) else {"raw": result}),
             "detailed_analysis": result,
-            "key_insights": self._extract_key_insights(result),
-            "recommendations": self._generate_recommendations(result),
+            "key_insights": self._extract_key_insights(result if isinstance(result, dict) else {"raw": result}),
+            "recommendations": self._generate_recommendations(result if isinstance(result, dict) else {"raw": result}),
             "visualization_suggestions": self._suggest_visualizations(parsed_query, result),
             "follow_up_queries": self._suggest_follow_ups(query, result),
             "data_quality": self._assess_data_quality(result),
@@ -343,177 +348,149 @@ class WBIATIAgentOrchestrator:
             }
         }
 
-        return response
-
     def _generate_executive_summary(self, result: Dict) -> str:
-        """Generate executive-level summary"""
-
+        """Generate executive-level summary."""
         if result.get("summary"):
             return result["summary"]
 
-        # Generate summary from available data
-        summary_parts = []
-
+        parts: List[str] = []
         if result.get("total_commitment"):
-            commitment = self._format_currency(result["total_commitment"])
-            summary_parts.append(f"Portfolio analysis shows {commitment} in total commitments")
-
+            parts.append(f"Portfolio analysis shows {self._format_currency(result['total_commitment'])} in total commitments")
         if result.get("key_insights"):
-            insight_count = len(result["key_insights"])
-            summary_parts.append(f"Generated {insight_count} strategic insights")
-
+            parts.append(f"Generated {len(result['key_insights'])} strategic insights")
         if result.get("enhanced"):
-            summary_parts.append("Enhanced with comprehensive knowledge base analysis")
+            parts.append("Enhanced with comprehensive knowledge base analysis")
 
-        return " | ".join(summary_parts) if summary_parts else "Analysis completed successfully"
+        return " | ".join(parts) if parts else "Analysis completed successfully."
 
     def _extract_key_insights(self, result: Dict) -> List[Dict[str, Any]]:
-        """Extract and format key insights"""
+        """Extract and format key insights."""
+        insights: List[Any] = []
 
-        insights = []
-
-        # From main agent
-        if result.get("key_insights"):
+        if isinstance(result.get("key_insights"), list):
             insights.extend(result["key_insights"])
 
-        # From DO agent enhancement
-        if result.get("do_agent_insights"):
-            do_insights = result["do_agent_insights"]
-            if isinstance(do_insights, dict) and "insights" in do_insights:
-                insights.extend(do_insights["insights"])
+        # DO agent insights (if structured)
+        do_insights = result.get("do_agent_insights")
+        if isinstance(do_insights, dict) and isinstance(do_insights.get("insights"), list):
+            insights.extend(do_insights["insights"])
 
-        # Ensure proper formatting
-        formatted_insights = []
-        for insight in insights[:5]:  # Top 5 insights
+        formatted: List[Dict[str, Any]] = []
+        for insight in insights[:5]:
             if isinstance(insight, dict):
-                formatted_insights.append({
+                formatted.append({
                     "title": insight.get("title", "Key Finding"),
                     "impact": insight.get("impact", "Medium"),
                     "finding": insight.get("finding", insight.get("description", "")),
                     "recommendation": insight.get("recommendation", "Continue monitoring"),
                     "confidence": insight.get("confidence", 0.85)
                 })
-
-        return formatted_insights
+            else:
+                formatted.append({
+                    "title": "Key Finding",
+                    "impact": "Medium",
+                    "finding": str(insight),
+                    "recommendation": "Continue monitoring",
+                    "confidence": 0.75
+                })
+        return formatted
 
     def _generate_recommendations(self, result: Dict) -> List[str]:
-        """Generate actionable recommendations"""
-
-        recommendations = [
-            "Continue monitoring key performance indicators",
-            "Review portfolio distribution for optimization opportunities",
-            "Analyze implementation efficiency across sectors"
+        """Generate actionable recommendations."""
+        recs = [
+            "Continue monitoring key performance indicators.",
+            "Review portfolio distribution for optimization opportunities.",
+            "Analyze implementation efficiency across sectors."
         ]
-
-        # Add specific recommendations from insights
-        if result.get("key_insights"):
+        if isinstance(result.get("key_insights"), list):
             for insight in result["key_insights"][:3]:
                 if isinstance(insight, dict) and insight.get("recommendation"):
-                    recommendations.append(insight["recommendation"])
-
-        return recommendations[:5]  # Top 5 recommendations
+                    recs.append(insight["recommendation"])
+        return recs[:5]
 
     def _update_session_stats(self, execution_time: float):
-        """Update session statistics"""
-
+        """Update session statistics."""
         self.session_stats["queries_processed"] += 1
-
-        # Update average response time
-        current_avg = self.session_stats["avg_response_time"]
-        query_count = self.session_stats["queries_processed"]
-
-        new_avg = ((current_avg * (query_count - 1)) + execution_time) / query_count
-        self.session_stats["avg_response_time"] = new_avg
+        count = self.session_stats["queries_processed"]
+        prev = self.session_stats["avg_response_time"]
+        self.session_stats["avg_response_time"] = ((prev * (count - 1)) + execution_time) / count
 
     def _create_error_response(self, error: str, query: str, execution_time: float) -> Dict[str, Any]:
-        """Create error response"""
-
+        """Create error response."""
         return {
             "error": True,
             "message": error,
             "query": query,
             "execution_time": execution_time,
             "timestamp": datetime.now().isoformat(),
-            "support_message": "Please contact support with this error information",
+            "support_message": "Please contact support with this error information.",
             "suggested_actions": [
-                "Try rephrasing your query",
-                "Check if all required parameters are provided",
-                "Verify data availability for the requested scope"
+                "Try rephrasing your query.",
+                "Check that all required secrets are configured.",
+                "Verify data availability for the requested scope."
             ]
         }
 
     def _format_currency(self, amount: float) -> str:
-        """Format currency amounts"""
-        if amount >= 1e9:
-            return f"${amount/1e9:.1f}B"
-        elif amount >= 1e6:
-            return f"${amount/1e6:.1f}M"
-        else:
-            return f"${amount:,.0f}"
+        """Format currency amounts."""
+        try:
+            amt = float(amount)
+        except Exception:
+            return str(amount)
 
-# Command-line interface for testing
+        if amt >= 1e9:
+            return f"${amt/1e9:.1f}B"
+        if amt >= 1e6:
+            return f"${amt/1e6:.1f}M"
+        return f"${amt:,.0f}"
+
+    # ---- The following are lightweight placeholders to keep UI stable ----
+    def _suggest_visualizations(self, parsed_query: Dict, result: Any) -> List[str]:
+        return ["Time series chart", "Sector distribution bar chart", "Geographic map"]  # minimal default
+
+    def _suggest_follow_ups(self, query: str, result: Any) -> List[str]:
+        return [
+            "Break down results by sector.",
+            "Show trends over the last 3 years.",
+            "Highlight projects with delivery risk."
+        ]
+
+    def _assess_data_quality(self, result: Any) -> Dict[str, Any]:
+        return {"quality": "unknown", "notes": "Data quality assessment not fully implemented."}
+
+
+# Command-line interface for local testing only (safe)
 async def main():
-    """Main function for testing the orchestrator"""
-
     print("🌍 World Bank IATI Intelligence Agent")
     print("=" * 50)
 
-    # Initialize orchestrator
     orchestrator = WBIATIAgentOrchestrator()
-
-    # Initialize agent
     init_success = await orchestrator.initialize()
 
     if not init_success:
         print("❌ Agent initialization failed")
         return
 
-    # Display agent status
     status = orchestrator.get_agent_status()
     print(f"\n✅ Agent Status: {status['agent_info']['name']} v{status['agent_info']['version']}")
-    print(f"📊 Data Coverage: {status['api_config']['data_coverage']}")
-    print(f"🔗 Endpoint: {status['api_config']['endpoint'][:50]}...")
+    print(f"🔗 Endpoint: {str(status['api_config']['endpoint'])[:50]}...")
 
-    # Test queries
     test_queries = [
         "What is the World Bank's total active portfolio?",
         "Show me education sector trends in Sub-Saharan Africa",
-        "Create an executive dashboard for portfolio performance",
-        "Analyze climate finance distribution by region",
-        "Compare infrastructure investment efficiency across countries"
+        "Create an executive dashboard for portfolio performance"
     ]
 
-    print(f"\n🧪 Testing with {len(test_queries)} sample queries...")
+    for i, q in enumerate(test_queries, 1):
+        print(f"\n{i}. {q}")
+        res = await orchestrator.process_user_query(q)
+        if res.get("error"):
+            print(f"   ❌ {res.get('message')}")
+        else:
+            print(f"   ✅ {res.get('executive_summary','')[:120]}...")
 
-    for i, query in enumerate(test_queries, 1):
-        print(f"\n{i}. Testing: '{query}'")
-
-        try:
-            start_time = time.time()
-            result = await orchestrator.process_user_query(query)
-            execution_time = time.time() - start_time
-
-            if result.get("error"):
-                print(f"   ❌ Error: {result['message']}")
-            else:
-                print(f"   ✅ Success ({execution_time:.2f}s)")
-                print(f"   📊 Summary: {result['executive_summary'][:100]}...")
-                print(f"   💡 Insights: {len(result.get('key_insights', []))}")
-
-        except Exception as e:
-            print(f"   ❌ Exception: {e}")
-
-    # Final session statistics
-    final_status = orchestrator.get_agent_status()
-    stats = final_status["session_stats"]
-
-    print(f"\n📈 Session Summary:")
-    print(f"   Queries Processed: {stats['queries_processed']}")
-    print(f"   Dashboards Created: {stats['dashboards_created']}")
-    print(f"   Average Response Time: {stats['avg_response_time']:.2f}s")
-
-    print("\n🎯 World Bank IATI Intelligence Agent ready for production")
+    print("\n🎯 Ready.")
 
 if __name__ == "__main__":
-    run_async_safely.run(main())
-    
+    # Only for local CLI runs; Streamlit won't execute this.
+    asyncio.run(main())
