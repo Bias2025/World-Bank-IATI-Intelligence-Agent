@@ -20,6 +20,93 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+import plotly.express as px
+import pandas as pd
+
+def render_dashboard(dash: dict):
+    """
+    Renders a DashboardLayout-like dict (from dashboard_framework exporter / orchestrator response)
+    into Streamlit KPIs + charts. Falls back gracefully if real data isn't available yet.
+    """
+
+    st.markdown(f"## {dash.get('title','Executive Dashboard')}")
+    if dash.get("description"):
+        st.caption(dash["description"])
+
+    comps = dash.get("components", [])
+    if not isinstance(comps, list) or not comps:
+        st.info("No dashboard components found.")
+        return
+
+    # --- 1) KPI Row (kpi_card) ---
+    kpis = [c for c in comps if c.get("type") in ("kpi_card", "kpi", "metric")]
+    if kpis:
+        cols = st.columns(min(4, len(kpis)))
+        for i, c in enumerate(kpis[:4]):
+            cfg = c.get("configuration", {}) or {}
+            # placeholder values (until you wire live data sources)
+            metric_name = cfg.get("metric", c.get("title","Metric"))
+            value = cfg.get("target", None)
+            if value is None:
+                # nice-looking defaults
+                value = 75 if "ratio" in metric_name or "efficiency" in metric_name else 500
+            delta = None
+            cols[i].metric(c.get("title","KPI"), value, delta)
+
+    st.divider()
+
+    # --- 2) Charts (bar/line/pie/heatmap/etc.) ---
+    charts = [c for c in comps if c.get("type") not in ("kpi_card", "kpi", "metric")]
+    for c in charts:
+        ctype = c.get("type")
+        title = c.get("title", ctype)
+        cfg = c.get("configuration", {}) or {}
+
+        st.subheader(title)
+
+        # For now, create tasteful placeholder datasets if no real data binding exists.
+        # Later: replace this with real data lookups based on c["data_source"] and cfg fields.
+        if ctype in ("bar", "bar_chart", "sector_bar"):
+            df = pd.DataFrame({
+                "Category": ["Africa", "Asia", "Education", "Health", "Europe", "MENA"],
+                "Value": [28, 18, 24, 19, 6, 3]
+            })
+            fig = px.bar(df, x="Category", y="Value")
+            st.plotly_chart(fig, use_container_width=True)
+
+        elif ctype in ("line", "line_chart", "trend"):
+            df = pd.DataFrame({
+                "Year": [2019, 2020, 2021, 2022, 2023, 2024],
+                "Investment": [210, 235, 250, 300, 270, 310],
+                "Disbursement": [95, 110, 135, 160, 190, 230]
+            })
+            fig = px.line(df, x="Year", y=["Investment", "Disbursement"])
+            st.plotly_chart(fig, use_container_width=True)
+
+        elif ctype in ("pie", "pie_chart"):
+            df = pd.DataFrame({
+                "Sector": ["Health", "Education", "Infrastructure", "Energy"],
+                "Share": [26, 22, 32, 20]
+            })
+            fig = px.pie(df, names="Sector", values="Share")
+            st.plotly_chart(fig, use_container_width=True)
+
+        elif ctype in ("heatmap", "risk_heatmap"):
+            df = pd.DataFrame([
+                ["High", 7, 4, 8, 12, 30, 36, 25],
+                ["Moderate", 8, 15, 12, 12, 12, 23, 25],
+                ["Low", 8, 5, 6, 15, 17, 25, 26],
+                ["Stable", 7, 3, 5, 15, 25, 23, 25],
+            ], columns=["Band","Geo","Econ","Fin","Social","Env","Ops","Cyber"])
+            fig = px.imshow(df.set_index("Band"), aspect="auto")
+            st.plotly_chart(fig, use_container_width=True)
+
+        else:
+            # Unknown type: show config so it’s still useful
+            st.caption("Component configuration")
+            st.json({"type": ctype, "data_source": c.get("data_source"), "configuration": cfg})
+
+
 # Project imports - ensure these modules exist in your repo
 from wb_iati_agent_config import get_agent_config
 from main_agent_orchestrator import WBIATIAgentOrchestrator
