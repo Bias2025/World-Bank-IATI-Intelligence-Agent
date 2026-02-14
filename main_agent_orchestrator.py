@@ -10,6 +10,42 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import logging
 
+# ---- async helper (paste near top of main_agent_orchestrator.py, after other imports) ----
+import asyncio
+try:
+    import nest_asyncio
+except Exception:
+    nest_asyncio = None
+
+def run_async_safely(coro):
+    """
+    Run an async coroutine from synchronous code safely in environments
+    where an event loop may already be running (Streamlit).
+    Usage: result = run_async_safely(orchestrator.initialize())
+    """
+    try:
+        # Normal case when no loop is running
+        return run_async_safely.run(coro)
+    except RuntimeError:
+        # Event loop already running (Streamlit). Patch with nest_asyncio if available.
+        if nest_asyncio:
+            nest_asyncio.apply()
+            return run_async_safely.run(coro)
+        # As a last resort, use asyncio.get_event_loop().create_task and wait for completion synchronously.
+        loop = asyncio.get_event_loop()
+        future = asyncio.ensure_future(coro, loop=loop)
+        # Wait for future completion in a blocking way (not ideal, but safe fallback)
+        # We poll until done to avoid illegal run_until_complete on running loop.
+        while not future.done():
+            # allow other tasks to run briefly
+            loop.call_soon(lambda: None)
+            # small sleep to avoid busy loop
+            import time
+            time.sleep(0.01)
+        return future.result()
+# -----------------------------------------------------------------------------------------
+
+
 # Import all agent components
 from wb_iati_agent_config import AgentConfig, get_agent_config
 from wb_iati_intelligence_agent import WBIATIIntelligenceAgent
@@ -479,4 +515,5 @@ async def main():
     print("\n🎯 World Bank IATI Intelligence Agent ready for production")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    run_async_safely.run(main())
+    
