@@ -270,6 +270,7 @@ with left_col:
 
         # Query area
         query = st.text_area("Enter your natural language query", height=160, value=st.session_state["query_text"], key="query_input")
+        auto_dashboard = st.toggle("Auto-generate portfolio dashboard after query", value=True)
 
         # Buttons
         col_run, col_dash, col_clear = st.columns([1,1,1])
