@@ -377,3 +377,59 @@ __all__ = [
 ]
 # ----------------- End compatibility block -----------------
 
+# ----------------- Orchestrator-compatible test_connection wrapper -----------------
+# Replace or append this compatibility function to do_api_integration.py
+
+import json
+
+async def test_connection_for_orchestrator(client: DigitalOceanAPI, *, timeout: int = None):
+    """
+    Returns a lightweight dict that includes 'overall_status' and other fields
+    so older orchestrator code that indexes the result like a dict keeps working.
+
+    Example return:
+    {
+      "overall_status": "ok",
+      "details": {...},
+      "raw": {...}
+    }
+    """
+    try:
+        # call health_check which returns APIResponse
+        resp = await client.health_check()
+    except Exception as e:
+        return {"overall_status": "error", "details": {"error": str(e)}, "raw": None}
+
+    # If resp is our APIResponse dataclass (success boolean + data)
+    if getattr(resp, "success", False):
+        # The agent health endpoint may return structured JSON in resp.data.
+        # If it contains a known top-level key, prefer that.
+        raw = resp.data if resp.data is not None else {}
+        # Determine a simple overall_status
+        overall = "ok"
+        # If raw is a dict and contains health semantics, try to derive
+        if isinstance(raw, dict):
+            # prefer explicit keys if present
+            if raw.get("status"):
+                overall = raw.get("status")
+            elif raw.get("overall_status"):
+                overall = raw.get("overall_status")
+            elif raw.get("health") and raw["health"].get("ok") is False:
+                overall = "degraded"
+        return {"overall_status": overall, "details": {"http_status": resp.status_code}, "raw": raw}
+    else:
+        return {"overall_status": "error", "details": {"error": resp.error, "http_status": resp.status_code}, "raw": None}
+
+# Synchronous wrapper if old code calls test_connection() synchronously:
+def test_connection(client: DigitalOceanAPI, *, timeout: int = None):
+    return asyncio.run(test_connection_for_orchestrator(client, timeout=timeout))
+
+# Ensure this name is exported for compatibility
+if "test_connection" not in globals():
+    globals()["test_connection"] = test_connection
+
+# Add to __all__ if you use it
+if "__all__" in globals() and "test_connection" not in __all__:
+    __all__.append("test_connection")
+
+
