@@ -286,11 +286,64 @@ if __name__ == "__main__":
             asyncio.run(client.close())
         except Exception:
             pass
-# ----------------- Compatibility shim -----------------
-# The original orchestrator expected names ChatbotInterface and test_connection.
-# Provide backward-compatible exports so existing code keeps working.
+# ----------------- Backwards compatibility & dict-like APIResponse -----------------
+# Add this block to the end of do_api_integration.py to restore expected exports
+# and to make APIResponse subscriptable (dict-like) so legacy orchestrator code works.
 
-ChatbotInterface = DigitalOceanAPI  # backwards-compatible alias
+from typing import Iterator
+
+# 1) Dict-like behavior for APIResponse
+def _apiresponse_as_mapping_methods():
+    # add methods to APIResponse dynamically to keep the original dataclass shape
+    def __getitem__(self, key):
+        # allow both attribute and dict-style access
+        if hasattr(self, key):
+            return getattr(self, key)
+        if self.meta and key in self.meta:
+            return self.meta[key]
+        raise KeyError(key)
+
+    def get(self, key, default=None):
+        try:
+            return self.__getitem__(key)
+        except KeyError:
+            return default
+
+    def keys(self) -> Iterator[str]:
+        # primary fields
+        for k in ("success", "data", "error", "status_code", "execution_time", "meta"):
+            yield k
+
+    def items(self):
+        for k in self.keys():
+            yield (k, getattr(self, k))
+
+    def to_dict(self):
+        # prefer existing method if present
+        if hasattr(self, "__dict__"):
+            return {k: getattr(self, k) for k in ("success", "data", "error", "status_code", "execution_time", "meta")}
+        return {}
+
+    # attach if not already present
+    if not hasattr(APIResponse, "__getitem__"):
+        APIResponse.__getitem__ = __getitem__
+    if not hasattr(APIResponse, "get"):
+        APIResponse.get = get
+    if not hasattr(APIResponse, "keys"):
+        APIResponse.keys = keys
+    if not hasattr(APIResponse, "items"):
+        APIResponse.items = items
+    if not hasattr(APIResponse, "to_dict"):
+        APIResponse.to_dict = to_dict
+    # also implement mapping protocol
+    if not hasattr(APIResponse, "__iter__"):
+        APIResponse.__iter__ = lambda self: iter(self.keys())
+
+_apiresponse_as_mapping_methods()
+
+# 2) Backward-compatible names and helpers
+# Alias expected by older orchestrator code
+ChatbotInterface = DigitalOceanAPI  # legacy name compatibility
 
 async def test_connection(client: DigitalOceanAPI, *, timeout: int = None) -> APIResponse:
     """
@@ -298,9 +351,7 @@ async def test_connection(client: DigitalOceanAPI, *, timeout: int = None) -> AP
     Calls the client's health_check and returns an APIResponse.
     """
     try:
-        # Optionally adjust client's health timeout if caller provided one
         if timeout:
-            # Create a short-lived session call using provided timeout
             return await client._request_with_retries("GET", "/health", timeout_seconds=timeout)
         return await client.health_check()
     except Exception as e:
@@ -310,9 +361,12 @@ def test_connection_sync(client: DigitalOceanAPI, *, timeout: int = None) -> API
     """
     Synchronous wrapper for code that expects a sync function.
     """
-    return asyncio.run(test_connection(client, timeout=timeout))
+    try:
+        return asyncio.run(test_connection(client, timeout=timeout))
+    except Exception as e:
+        return APIResponse(success=False, error=str(e))
 
-# Also export names explicitly for `from do_api_integration import ChatbotInterface, test_connection`
+# 3) Ensure these names are importable via `from do_api_integration import ChatbotInterface, test_connection`
 __all__ = [
     "DigitalOceanAPI",
     "APIResponse",
@@ -321,5 +375,5 @@ __all__ = [
     "test_connection_sync",
     "RateLimiter",
 ]
-# ----------------- End compatibility shim -----------------
+# ----------------- End compatibility block -----------------
 
