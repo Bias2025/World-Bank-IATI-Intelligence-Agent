@@ -286,3 +286,40 @@ if __name__ == "__main__":
             asyncio.run(client.close())
         except Exception:
             pass
+# ----------------- Compatibility shim -----------------
+# The original orchestrator expected names ChatbotInterface and test_connection.
+# Provide backward-compatible exports so existing code keeps working.
+
+ChatbotInterface = DigitalOceanAPI  # backwards-compatible alias
+
+async def test_connection(client: DigitalOceanAPI, *, timeout: int = None) -> APIResponse:
+    """
+    Async helper used by older orchestrator code.
+    Calls the client's health_check and returns an APIResponse.
+    """
+    try:
+        # Optionally adjust client's health timeout if caller provided one
+        if timeout:
+            # Create a short-lived session call using provided timeout
+            return await client._request_with_retries("GET", "/health", timeout_seconds=timeout)
+        return await client.health_check()
+    except Exception as e:
+        return APIResponse(success=False, error=str(e))
+
+def test_connection_sync(client: DigitalOceanAPI, *, timeout: int = None) -> APIResponse:
+    """
+    Synchronous wrapper for code that expects a sync function.
+    """
+    return asyncio.run(test_connection(client, timeout=timeout))
+
+# Also export names explicitly for `from do_api_integration import ChatbotInterface, test_connection`
+__all__ = [
+    "DigitalOceanAPI",
+    "APIResponse",
+    "ChatbotInterface",
+    "test_connection",
+    "test_connection_sync",
+    "RateLimiter",
+]
+# ----------------- End compatibility shim -----------------
+
