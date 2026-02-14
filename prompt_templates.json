@@ -1,0 +1,32 @@
+{
+  "expert_prompts": {
+    "portfolio_performance": "Analyze the overall World Bank portfolio performance including disbursement efficiency, sector distribution, and regional allocation. Provide executive-level insights with key metrics and trends.",
+    "disbursement_analysis": "Examine World Bank disbursement patterns across sectors and regions. Identify bottlenecks, delays, and opportunities for improvement. Include quarterly trends and comparative analysis.",
+    "commitment_trends": "Analyze World Bank commitment trends by sector and region over the last 5 years. Identify growth areas, declining sectors, and strategic shifts in development finance priorities.",
+    "portfolio_concentration": "Assess World Bank portfolio concentration risks across sectors, countries, and financial instruments. Provide recommendations for diversification and risk mitigation.",
+    "education_performance": "Deep-dive analysis of World Bank education sector performance including project outcomes, disbursement efficiency, and impact on learning outcomes across different country contexts.",
+    "health_outcomes": "Comprehensive analysis of World Bank health sector investments focusing on system strengthening, pandemic preparedness, and health outcome improvements with regional comparisons.",
+    "infrastructure_impact": "Assess World Bank infrastructure project impact and efficiency including transport, energy, and digital infrastructure with focus on economic returns and sustainability.",
+    "climate_finance": "Examine World Bank climate finance allocation including adaptation, mitigation, and co-benefits tracking. Analyze alignment with Paris Agreement goals and SDG targets.",
+    "regional_comparison": "Compare World Bank portfolio performance across different regions including IDA vs IBRD performance, project success rates, and development outcome achievements.",
+    "fragile_states": "Analyze World Bank investments in fragile and conflict-affected states including risk mitigation strategies, project adaptation approaches, and development effectiveness.",
+    "country_portfolio": "Detailed country portfolio analysis including active projects, financial flows, sector composition, implementation progress, and results framework achievements.",
+    "subnational_distribution": "Sub-national investment distribution analysis focusing on geographic equity, urban-rural balance, and targeting of underserved populations.",
+    "executive_summary": "Generate comprehensive executive dashboard for World Bank board presentation including portfolio KPIs, strategic insights, risk assessment, and forward-looking recommendations.",
+    "quarterly_review": "Create quarterly World Bank portfolio performance review including financial metrics, implementation progress, results achievements, and pipeline analysis.",
+    "strategic_overview": "Strategic portfolio overview with focus on institutional priorities, cross-cutting themes, and alignment with World Bank Group strategy and country partnership frameworks.",
+    "risk_dashboard": "Comprehensive portfolio risk assessment dashboard including implementation risks, financial risks, reputational risks, and environmental and social safeguards.",
+    "predictive_analysis": "Predictive analysis for future World Bank disbursements based on historical patterns, pipeline strength, and country capacity indicators.",
+    "anomaly_detection": "Detect anomalies and unusual patterns in World Bank portfolio data including irregular disbursement patterns, project delays, and performance outliers.",
+    "efficiency_benchmarking": "Benchmark World Bank efficiency against peer multilateral development banks including cost ratios, speed of deployment, and development effectiveness.",
+    "results_correlation": "Correlate World Bank investments with development outcomes using country-level indicators, sector performance metrics, and impact evaluation data."
+  },
+  "quick_actions": {
+    "portfolio_overview": "Based on the available World Bank IATI data, analyze and aggregate individual project information to provide portfolio insights. Extract sector distributions, regional patterns, project statuses, and calculate performance indicators from the available IATI project data. Focus on trends and patterns you can identify from the individual project records in the knowledge base.",
+    "sector_analysis": "From the available World Bank IATI project data, analyze sector distribution patterns. Identify which sectors appear most frequently in the project data, examine sector-specific characteristics, timelines, and participating organizations. Provide sector insights based on the individual project records available in the knowledge base.",
+    "geographic_insights": "From the World Bank IATI project data available, analyze geographic patterns and regional distribution. Identify which countries and regions appear in the project records, examine location-specific project characteristics, and provide insights about regional focus areas based on the available project data.",
+    "trend_analysis": "Conduct comprehensive trend analysis of World Bank development finance including historical patterns, growth trajectories, seasonal variations, and predictive forecasting for future commitments and disbursements.",
+    "risk_assessment": "Perform portfolio risk assessment identifying concentration risks, implementation challenges, financial risks, and environmental/social safeguards across the World Bank's active portfolio.",
+    "create_dashboard": "Create an executive-level dashboard suitable for World Bank management and board presentations, including KPIs, visualizations, trend analysis, and strategic recommendations."
+  }
+}
