@@ -320,4 +320,370 @@ def make_demo_data(country: str, years: str, sector: str) -> dict:
 
     # aid type mix
     mix_names = ["Grants", "Loans", "Technical Assistance", "Equity/Guarantees"]
-    mix_weigh_
+    mix_weights = [rng.uniform(0.1, 0.5) for _ in mix_names]
+    msum = sum(mix_weights)
+    mix = [{"Type": mix_names[i], "Value": commitments * (mix_weights[i] / msum)} for i in range(len(mix_names))]
+
+    narrative = (
+        f"**DEMO DATA (KB slice missing)**\n\n"
+        f"Showing a realistic portfolio pattern for **{country}**, **{years}**"
+        + (f", **{sector}**." if sector and sector != "All" else ".")
+        + "\n\nUse this dashboard layout to validate UX, then connect the KB slices to replace placeholders."
+    )
+
+    return {
+        "kpis": {"Commitments": commitments, "Disbursements": disbursements, "Projects": projects, "Disbursement Ratio %": ratio},
+        "timeseries": pd.DataFrame(ts),
+        "sectors": pd.DataFrame(sectors),
+        "mix": pd.DataFrame(mix),
+        "narrative": narrative,
+    }
+
+def years_range_to_list(years: str) -> list[int]:
+    # "2021-2024" -> [2021,2022,2023,2024]
+    m = re.match(r"^\s*(\d{4})\s*-\s*(\d{4})\s*$", years)
+    if not m:
+        return [datetime.utcnow().year - 3, datetime.utcnow().year - 2, datetime.utcnow().year - 1, datetime.utcnow().year]
+    a, b = int(m.group(1)), int(m.group(2))
+    if a > b:
+        a, b = b, a
+    return list(range(a, b + 1))
+
+# ---- Sidebar (filters + quick actions + connection status) ----
+with st.sidebar:
+    st.markdown("<div class='wb-side'>", unsafe_allow_html=True)
+    st.markdown("### Filters")
+    country = st.selectbox("Country", ["Global", "KEN", "NGA", "IND", "BRA", "PHL", "IDN", "EGY", "PAK", "ETH"], index=1)
+    years = st.selectbox("Year range", ["2020-2023", "2021-2024", "2022-2025"], index=1)
+    sector = st.selectbox("Sector", ["All", "Health", "Education", "Energy", "Transport", "Water", "Governance", "Agriculture"], index=0)
+
+    st.divider()
+    st.markdown("### Quick Actions")
+    PROMPTS = {
+        "Refresh dashboard (narrative + tables)":
+            "Generate a dashboard narrative and KPI/Chart tables for the current context. "
+            "Return formatted markdown only (no JSON).",
+        "Executive portfolio brief":
+            "Write a 1-page executive brief for the current context. "
+            "Include: key trends, what changed, what matters, and 5 evidence items (IATI activity IDs/titles if available).",
+        "Effectiveness & results scan":
+            "Identify projects with the strongest outcome evidence in the current context. "
+            "Summarize patterns and cite evidence (IATI IDs/titles).",
+        "Risk & data quality scan":
+            "Flag anomalies, missingness, or suspicious patterns in the current context. "
+            "Be specific and cite evidence where possible."
+    }
+    quick = st.selectbox("Insert a standard prompt", ["—"] + list(PROMPTS.keys()))
+    if quick != "—":
+        st.session_state["draft_prompt"] = PROMPTS[quick]
+        st.success("Prompt loaded (you can send it in Chat).")
+
+    st.divider()
+    st.markdown("### Connection")
+    st.caption(f"Endpoint: `{DO_AGENT_ENDPOINT}`")
+    st.caption(f"API key: `{'✅ set' if bool(DO_AGENT_API_KEY) else '❌ missing'}`")
+    st.caption(f"Agent ID: `{AGENT_ID or '—'}`")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ---- Session State ----
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {
+            "role": "assistant",
+            "content": (
+                "Hi — I’m the **World Bank IATI Intelligence Agent**.\n\n"
+                "Use the dashboard to explore the portfolio, then ask questions in chat.\n"
+                "I’ll cite evidence when available in the KB.\n\n"
+                "Tip: Click **Refresh dashboard** to pull KPI + chart data for your selected filters."
+            ),
+        }
+    ]
+
+if "draft_prompt" not in st.session_state:
+    st.session_state["draft_prompt"] = ""
+
+if "dash_md" not in st.session_state:
+    st.session_state["dash_md"] = ""  # latest dashboard markdown returned by agent
+
+if "dash_demo" not in st.session_state:
+    st.session_state["dash_demo"] = False
+
+# ---- Dashboard prompt spec (formatted text only) ----
+def dashboard_prompt(context: str) -> str:
+    return f"""
+You are the World Bank IATI Intelligence Agent.
+
+{context}
+
+Return **formatted markdown only** (no JSON) in this exact structure:
+
+## Dashboard Narrative
+(5–10 bullets, executive-friendly. Mention time window and scope.)
+
+### KPI
+| Metric | Value |
+|---|---|
+| Total commitments | <number USD> |
+| Total disbursements | <number USD> |
+| # projects | <integer> |
+| Disbursement ratio | <percent> |
+
+### Trend
+| Period | Commitments | Disbursements |
+|---|---:|---:|
+| 2023 Q1 | ... | ... |
+
+### Sectors
+| Sector | Value |
+|---|---:|
+| Health | ... |
+
+### Mix
+| Type | Value |
+|---|---:|
+| Grants | ... |
+
+### Evidence
+(Up to 6 items. Prefer IATI activity identifiers + short titles. If unavailable, say so clearly.)
+
+If the KB does not contain enough data to fill tables, explicitly write 'NA' in the Value cells.
+"""
+
+# ---- Extract metrics from markdown tables; if missing -> DEMO fallback ----
+def build_dashboard_from_md(md: str, country: str, years: str, sector: str):
+    demo = False
+
+    kpi_df = parse_markdown_table(md, "KPI")
+    trend_df = parse_markdown_table(md, "Trend")
+    sectors_df = parse_markdown_table(md, "Sectors")
+    mix_df = parse_markdown_table(md, "Mix")
+
+    # Heuristic: if any required table missing or contains NA -> fallback demo
+    def df_has_na(df: pd.DataFrame | None) -> bool:
+        if df is None or df.empty:
+            return True
+        flat = " ".join(df.astype(str).fillna("").values.flatten().tolist()).upper()
+        return "NA" in flat or "N/A" in flat
+
+    if df_has_na(kpi_df) or df_has_na(trend_df) or df_has_na(sectors_df) or df_has_na(mix_df):
+        demo = True
+        demo_data = make_demo_data(country, years, sector)
+        return demo_data, demo
+
+    # Parse KPI
+    kpi_map = {}
+    for _, row in kpi_df.iterrows():
+        metric = str(row.get("Metric", "")).strip()
+        val = str(row.get("Value", "")).strip()
+        if not metric:
+            continue
+        if "commit" in metric.lower():
+            kpi_map["Commitments"] = money_to_float(val)
+        elif "disburs" in metric.lower():
+            kpi_map["Disbursements"] = money_to_float(val)
+        elif "project" in metric.lower():
+            try:
+                kpi_map["Projects"] = int(re.sub(r"[^\d]", "", val) or "0")
+            except:
+                kpi_map["Projects"] = None
+        elif "ratio" in metric.lower():
+            kpi_map["Disbursement Ratio %"] = pct_to_float(val)
+
+    # Trend
+    tdf = trend_df.rename(columns={c: c.strip() for c in trend_df.columns})
+    # ensure numeric columns
+    if "Commitments" in tdf.columns:
+        tdf["Commitments"] = tdf["Commitments"].apply(money_to_float)
+    if "Disbursements" in tdf.columns:
+        tdf["Disbursements"] = tdf["Disbursements"].apply(money_to_float)
+
+    # Sectors
+    sdf = sectors_df.rename(columns={c: c.strip() for c in sectors_df.columns})
+    if "Value" in sdf.columns:
+        sdf["Value"] = sdf["Value"].apply(money_to_float)
+
+    # Mix
+    mdf = mix_df.rename(columns={c: c.strip() for c in mix_df.columns})
+    if "Value" in mdf.columns:
+        mdf["Value"] = mdf["Value"].apply(money_to_float)
+
+    # Narrative
+    narrative = md.split("### KPI")[0].strip() if "### KPI" in md else md
+
+    return {
+        "kpis": kpi_map,
+        "timeseries": tdf,
+        "sectors": sdf,
+        "mix": mdf,
+        "narrative": narrative,
+    }, demo
+
+# ---- Dashboard row ----
+top_left, top_right = st.columns([2.1, 1.0], gap="large")
+
+with top_left:
+    st.subheader("Portfolio Dashboard")
+
+with top_right:
+    refresh = st.button("🔄 Refresh dashboard", type="primary", use_container_width=True)
+
+context = build_context(country, years, sector)
+
+if refresh:
+    with st.spinner("Refreshing dashboard from KB…"):
+        md = call_agent_api(dashboard_prompt(context))
+    st.session_state["dash_md"] = md
+
+# Build dashboard data (KB-first; if missing -> demo)
+dash_md = st.session_state.get("dash_md", "")
+if dash_md.strip():
+    dash_data, is_demo = build_dashboard_from_md(dash_md, country, years, sector)
+else:
+    # no data yet -> demo so charts render immediately
+    dash_data, is_demo = make_demo_data(country, years, sector), True
+
+st.session_state["dash_demo"] = is_demo
+
+# Demo banner
+if is_demo:
+    st.markdown(
+        "<div class='demo'><b>DEMO DATA</b> — The KB did not return enough metrics for this slice. "
+        "Charts below are placeholder values generated for UX/demo purposes.</div>",
+        unsafe_allow_html=True,
+    )
+
+# KPI cards
+k = dash_data.get("kpis", {})
+kpi_cols = st.columns(4, gap="large")
+
+def fmt_money(v: float | None) -> str:
+    if v is None:
+        return "—"
+    # human readable
+    if v >= 1e9:
+        return f"${v/1e9:.2f}B"
+    if v >= 1e6:
+        return f"${v/1e6:.2f}M"
+    return f"${v:,.0f}"
+
+def fmt_int(v) -> str:
+    try:
+        return f"{int(v):,}"
+    except:
+        return "—"
+
+def fmt_pct(v: float | None) -> str:
+    if v is None:
+        return "—"
+    return f"{v:.1f}%"
+
+kpis = [
+    ("Total commitments", fmt_money(k.get("Commitments")), "From KB tables or DEMO fallback"),
+    ("Total disbursements", fmt_money(k.get("Disbursements")), "From KB tables or DEMO fallback"),
+    ("# projects", fmt_int(k.get("Projects")), "Count in scope"),
+    ("Disbursement ratio", fmt_pct(k.get("Disbursement Ratio %")), "Disbursements / Commitments"),
+]
+
+for i, (label, value, note) in enumerate(kpis):
+    with kpi_cols[i]:
+        st.markdown(
+            f"<div class='kpi'><div class='kpi-label'>{label}</div>"
+            f"<div class='kpi-value'>{value}</div>"
+            f"<div class='kpi-note'>{note}</div></div>",
+            unsafe_allow_html=True,
+        )
+
+# Charts layout
+c1, c2 = st.columns([1.4, 1.0], gap="large")
+c3, c4 = st.columns([1.0, 1.0], gap="large")
+
+ts = dash_data.get("timeseries", pd.DataFrame())
+sectors_df = dash_data.get("sectors", pd.DataFrame())
+mix_df = dash_data.get("mix", pd.DataFrame())
+
+with c1:
+    st.markdown("#### Commitments vs Disbursements (Trend)" + (" — DEMO" if is_demo else ""))
+    if not ts.empty and {"Period", "Commitments", "Disbursements"}.issubset(set(ts.columns)):
+        chart_df = ts.copy()
+        chart_df = chart_df.dropna(subset=["Commitments", "Disbursements"], how="all")
+        st.line_chart(chart_df.set_index("Period")[["Commitments", "Disbursements"]])
+    else:
+        st.info("Trend data not available.")
+
+with c2:
+    st.markdown("#### Sector Breakdown" + (" — DEMO" if is_demo else ""))
+    if not sectors_df.empty and {"Sector", "Value"}.issubset(set(sectors_df.columns)):
+        sdf = sectors_df.dropna(subset=["Value"]).sort_values("Value", ascending=False).head(10)
+        st.bar_chart(sdf.set_index("Sector")["Value"])
+    else:
+        st.info("Sector data not available.")
+
+with c3:
+    st.markdown("#### Aid Type / Modality Mix" + (" — DEMO" if is_demo else ""))
+    if not mix_df.empty and {"Type", "Value"}.issubset(set(mix_df.columns)):
+        mdf = mix_df.dropna(subset=["Value"]).sort_values("Value", ascending=False)
+        st.bar_chart(mdf.set_index("Type")["Value"])
+    else:
+        st.info("Mix data not available.")
+
+with c4:
+    st.markdown("#### Dashboard Narrative (Formatted Text)")
+    # Show the narrative (formatted markdown), regardless of demo/KB
+    st.markdown(dash_data.get("narrative", ""), help=f"{context}")
+
+st.divider()
+
+# ---- Chat ----
+st.subheader("Ask the Agent")
+
+# Render history
+for m in st.session_state.messages:
+    with st.chat_message("assistant" if m["role"] == "assistant" else "user"):
+        st.markdown(m["content"])
+
+# Loaded prompt helper (since chat_input can’t be prefilled)
+default_text = st.session_state.get("draft_prompt", "")
+if default_text:
+    st.info("A standard prompt is loaded. Click **Send loaded prompt** or edit it below.")
+    edited = st.text_area("Loaded prompt (editable):", value=default_text, height=120)
+    col_a, col_b = st.columns([1, 1])
+    with col_a:
+        send_loaded = st.button("Send loaded prompt", type="primary")
+    with col_b:
+        clear_loaded = st.button("Clear loaded prompt")
+    if clear_loaded:
+        st.session_state["draft_prompt"] = ""
+        st.rerun()
+else:
+    send_loaded = False
+    edited = ""
+
+user_input = st.chat_input("Ask about aid flows, project effectiveness, sectors, outcomes…")
+
+# Determine outgoing message
+outgoing = None
+if send_loaded:
+    outgoing = edited
+    st.session_state["draft_prompt"] = ""
+elif user_input:
+    outgoing = user_input
+
+# Send message
+if outgoing:
+    # Prefix with current filter context (keeps chat aligned with dashboard)
+    msg = f"{context}\n\nUser request: {outgoing}"
+
+    st.session_state.messages.append({"role": "user", "content": outgoing})
+    with st.chat_message("user"):
+        st.markdown(outgoing)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking with KB…"):
+            reply = call_agent_api(msg)
+        # Render formatted text (no JSON)
+        st.markdown(reply)
+
+    st.session_state.messages.append({"role": "assistant", "content": reply})
+
+# Footer
+st.caption("© 2026 World Bank — IATI Intelligence Agent (KB-first • demo fallback clearly labeled)")
