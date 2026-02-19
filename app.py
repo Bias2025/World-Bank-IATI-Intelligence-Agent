@@ -167,7 +167,7 @@ st.markdown(
         <div class="wb-badge">🌍 World Bank • IATI Intelligence</div>
         <div>
           <h1 class="wb-title">World Bank IATI Intelligence Agent</h1>
-          <p class="wb-subtitle">Transforming IATI data into development intelligence anyone can use.</p>
+          <p class="wb-subtitle">Transforming IATI data into development intelligence anyone can use, Powered by HCLTech</p>
         </div>
       </div>
     </div>
