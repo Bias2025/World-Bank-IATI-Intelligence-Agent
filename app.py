@@ -16,7 +16,7 @@ import altair as alt
 # DEMO fallback uses HEATMAPS (multi-color + legend)
 # Branding: LIGHT background + Teal→Cyan→Sky, Lavender→Violet, Indigo accents
 # Narrative panel smaller
-# Export: Download .md + copy-friendly display
+# Export: Keep ONLY "Download Last Response (.md)" button
 # ============================================================
 
 st.set_page_config(
@@ -167,7 +167,7 @@ st.markdown(
         <div class="wb-badge">🌍 World Bank • IATI Intelligence</div>
         <div>
           <h1 class="wb-title">World Bank IATI Intelligence Agent</h1>
-          <p class="wb-subtitle">Dashboard + chat insights from the KB (no uploads). Evidence-first. Heatmap DEMO fallback when KB slices are missing.</p>
+          <p class="wb-subtitle">Transforming IATI data into development intelligence anyone can use.</p>
         </div>
       </div>
     </div>
@@ -574,7 +574,6 @@ if refresh:
     st.session_state["dash_md"] = md
 
 dash_md = st.session_state.get("dash_md", "").strip()
-
 kb_parsed = build_dashboard_from_md(dash_md) if dash_md else None
 is_demo = kb_parsed is None
 
@@ -666,21 +665,6 @@ with c4:
     st.markdown(f"<div class='narrative-small'>{narrative}</div>", unsafe_allow_html=True)
     st.caption(context)
 
-# Export dashboard markdown
-st.markdown("### Export Dashboard Output")
-exp1, exp2 = st.columns([1, 1])
-with exp1:
-    st.download_button(
-        label="Download Dashboard (.md)",
-        data=(dash_md if dash_md else narrative),
-        file_name="dashboard_output.md",
-        mime="text/markdown",
-        use_container_width=True,
-    )
-with exp2:
-    st.caption("Copy-ready output:")
-    st.code((dash_md if dash_md else narrative), language="markdown")
-
 st.divider()
 
 # ============================================================
@@ -733,19 +717,14 @@ if outgoing:
     st.session_state.messages.append({"role": "assistant", "content": reply})
     st.session_state["last_response"] = reply
 
-# Export last chat response
+# Export last chat response: KEEP download button ONLY
 st.markdown("### Export Last Chat Response")
-c_exp1, c_exp2 = st.columns([1, 1])
-with c_exp1:
-    st.download_button(
-        label="Download Last Response (.md)",
-        data=(st.session_state.get("last_response") or ""),
-        file_name="agent_response.md",
-        mime="text/markdown",
-        use_container_width=True,
-    )
-with c_exp2:
-    st.caption("Copy-ready last response:")
-    st.code((st.session_state.get("last_response") or ""), language="markdown")
+st.download_button(
+    label="Download Last Response (.md)",
+    data=(st.session_state.get("last_response") or ""),
+    file_name="agent_response.md",
+    mime="text/markdown",
+    use_container_width=True,
+)
 
 st.caption("© 2026 World Bank — IATI Intelligence Agent (KB-first • DEMO heatmap fallback clearly labeled)")
