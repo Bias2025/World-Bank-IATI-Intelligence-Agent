@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>World Bank IATI Intelligence Agent</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="logo-section">
+        <i class="fas fa-globe"></i>
+        <h1>World Bank IATI Intelligence Agent</h1>
+      </div>
+      <p class="subtitle">KB-backed portfolio insights, results, and evidence — no uploads</p>
+
+      <div class="header-badges">
+        <span class="badge badge-primary"><i class="fas fa-database"></i> DigitalOcean KB</span>
+        <span class="badge badge-secondary" id="dataModeBadge"><i class="fas fa-check-circle"></i> KB Data</span>
+      </div>
+    </header>
+
+    <!-- Dashboard -->
+    <section class="dashboard" aria-label="Portfolio dashboard">
+      <div class="dashboard-header">
+        <div>
+          <h2 class="section-title">Portfolio Dashboard</h2>
+          <p class="section-subtitle">Charts update from the knowledge base. If a slice is missing, the UI uses clearly-labeled demo data.</p>
+        </div>
+
+        <div class="filters" role="group" aria-label="Dashboard filters">
+          <div class="filter">
+            <label for="countryFilter">Country</label>
+            <select id="countryFilter">
+              <option value="GLOBAL">Global</option>
+              <option value="KEN">Kenya</option>
+              <option value="NGA">Nigeria</option>
+              <option value="IND">India</option>
+              <option value="PAK">Pakistan</option>
+              <option value="IDN">Indonesia</option>
+              <option value="EGY">Egypt</option>
+            </select>
+          </div>
+
+          <div class="filter">
+            <label for="yearFilter">Years</label>
+            <select id="yearFilter">
+              <option value="2021-2024">2021–2024</option>
+              <option value="2020-2024">2020–2024</option>
+              <option value="2018-2024">2018–2024</option>
+              <option value="LAST_24M">Last 24 months</option>
+            </select>
+          </div>
+
+          <div class="filter">
+            <label for="sectorFilter">Sector</label>
+            <select id="sectorFilter">
+              <option value="ALL">All sectors</option>
+              <option value="Energy">Energy</option>
+              <option value="Transport">Transport</option>
+              <option value="Health">Health</option>
+              <option value="Education">Education</option>
+              <option value="Water">Water</option>
+              <option value="Agriculture">Agriculture</option>
+              <option value="Public Administration">Public Administration</option>
+            </select>
+          </div>
+
+          <button class="use-prompt-btn" id="refreshDashboardBtn" title="Refresh dashboard">
+            <i class="fas fa-rotate"></i>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <div class="demo-banner" id="demoBanner" hidden>
+        <i class="fas fa-triangle-exclamation"></i>
+        <strong>DEMO DATA IN USE.</strong>
+        <span>The KB did not return enough structured metrics for this slice. Charts are generated placeholders, and are labeled accordingly.</span>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Total Commitments</div>
+          <div class="kpi-value" id="kpiCommitments">—</div>
+          <div class="kpi-foot" id="kpiCommitmentsFoot">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Total Disbursements</div>
+          <div class="kpi-value" id="kpiDisbursements">—</div>
+          <div class="kpi-foot" id="kpiDisbursementsFoot">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Projects</div>
+          <div class="kpi-value" id="kpiProjects">—</div>
+          <div class="kpi-foot" id="kpiProjectsFoot">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Disbursement Ratio</div>
+          <div class="kpi-value" id="kpiRatio">—</div>
+          <div class="kpi-foot" id="kpiRatioFoot">—</div>
+        </div>
+      </div>
+
+      <div class="charts-grid">
+        <div class="chart-card">
+          <div class="chart-title" id="chartTitleTrend">Commitments vs Disbursements (Trend)</div>
+          <canvas id="trendChart" height="120"></canvas>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-title" id="chartTitleSectors">Top Sectors</div>
+          <canvas id="sectorChart" height="140"></canvas>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-title" id="chartTitleTop">Top Recipients / Projects</div>
+          <canvas id="topChart" height="140"></canvas>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-title" id="chartTitleMix">Funding Mix</div>
+          <canvas id="mixChart" height="140"></canvas>
+        </div>
+      </div>
+
+      <div class="dashboard-notes">
+        <div class="notes-card">
+          <div class="notes-header">
+            <h3>Dashboard Narrative & Evidence</h3>
+            <button class="action-btn secondary" id="copyDashboardBriefBtn" title="Copy dashboard narrative">
+              <i class="fas fa-copy"></i>
+              Copy Brief
+            </button>
+          </div>
+          <div class="notes-body" id="dashboardNarrative">
+            <div class="notes-placeholder">Click <strong>Refresh</strong> to generate the dashboard narrative from the KB.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Chat Container (existing pattern) -->
+    <main class="chat-container" aria-label="Agent chat">
+      <!-- Chat Messages Area -->
+      <div class="chat-messages" id="chatMessages"></div>
+
+      <!-- Standard Prompts Dropdown -->
+      <div class="prompt-section">
+        <label for="standardPrompts">Quick Actions:</label>
+        <select id="standardPrompts" class="prompt-dropdown">
+          <option value="">Choose a quick action...</option>
+          <optgroup label="Portfolio Snapshot">
+            <option value="portfolio_snapshot">Portfolio snapshot (bullets + evidence)</option>
+            <option value="top_sectors">Top sectors and trends</option>
+            <option value="top_projects">Top projects by disbursement + results</option>
+          </optgroup>
+          <optgroup label="Effectiveness & Results">
+            <option value="outcomes_evidence">Projects with strongest outcome evidence</option>
+            <option value="implementation_flags">Implementation risks / low disbursement flags</option>
+          </optgroup>
+          <optgroup label="Data Quality">
+            <option value="data_quality">Data quality issues for this slice</option>
+          </optgroup>
+          <optgroup label="Exec Brief">
+            <option value="exec_brief">1-page executive brief (copy-ready)</option>
+          </optgroup>
+        </select>
+        <button class="use-prompt-btn" id="usePromptBtn" disabled>
+          <i class="fas fa-paper-plane"></i>
+          Use Selected Prompt
+        </button>
+      </div>
+
+      <!-- Chat Input Area -->
+      <div class="chat-input-container">
+        <div class="input-wrapper">
+          <textarea id="messageInput" placeholder="Ask about aid flows, project effectiveness, results, risks, and evidence (IATI) …" rows="3"></textarea>
+          <button class="send-btn" id="sendBtn">
+            <i class="fas fa-paper-plane"></i>
+          </button>
+        </div>
+        <div class="input-actions">
+          <button class="action-btn secondary" id="clearBtn">
+            <i class="fas fa-trash"></i>
+            Clear Chat
+          </button>
+          <button class="action-btn secondary" id="exportBtn">
+            <i class="fas fa-download"></i>
+            Export Chat
+          </button>
+          <button class="action-btn secondary" id="debugBtn">
+            <i class="fas fa-bug"></i>
+            Test API
+          </button>
+          <div class="char-count" id="charCount">0/5000</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="status-indicator">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">AI Agent Status Unknown</span>
+      </div>
+      <p>&copy; 2026 World Bank IATI Intelligence. Powered by DigitalOcean Agents.</p>
+    </footer>
+  </div>
+
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-spinner">
+      <i class="fas fa-robot fa-spin"></i>
+      <p>AI Agent is thinking…</p>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
