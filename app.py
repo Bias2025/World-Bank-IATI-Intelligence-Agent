@@ -14,8 +14,9 @@ import altair as alt
 # World Bank IATI Intelligence Agent — Streamlit (Deployable)
 # Dashboard + Chat • KB-first via formatted text (markdown tables)
 # DEMO fallback uses HEATMAPS (multi-color + legend)
-# Branding: Teal → Cyan → Sky, Lavender → Violet, Indigo accents
-# Narrative panel is smaller
+# Branding: LIGHT background + Teal→Cyan→Sky, Lavender→Violet, Indigo accents
+# Narrative panel smaller
+# Export: Download .md + copy-friendly display
 # ============================================================
 
 st.set_page_config(
@@ -33,38 +34,27 @@ if not DO_AGENT_ENDPOINT:
     st.error("Missing DO_AGENT_ENDPOINT. Add it in Streamlit Secrets or environment variables.")
     st.stop()
 
-# ---- Branding / Styling ----
+# ---- LIGHT enterprise styling (readable) ----
 st.markdown(
     """
     <style>
       :root{
-        --bgDeep:#041521;
-        --bgMid:#06314d;
+        --bgMain:#f4f7fb;
+        --card:#ffffff;
+        --ink:#0f172a;
+        --muted:#64748b;
 
-        --card: rgba(255,255,255,.92);
-        --card2: rgba(255,255,255,.86);
-        --ink:#071a2b;
-        --muted:#4b5b6b;
-
-        /* Palette */
         --teal:#14b8a6;
         --cyan:#22d3ee;
         --sky:#38bdf8;
 
         --lav:#c4b5fd;
         --violet:#8b5cf6;
-        --purple:#a78bfa;
-
         --indigo:#4f46e5;
-        --indigoDeep:#2e2a86;
       }
 
       .stApp{
-        background:
-          radial-gradient(1100px 760px at 12% 12%, rgba(20,184,166,.22), transparent 58%),
-          radial-gradient(900px 660px at 86% 22%, rgba(196,181,253,.22), transparent 55%),
-          radial-gradient(900px 700px at 70% 90%, rgba(56,189,248,.14), transparent 60%),
-          linear-gradient(135deg, var(--bgDeep) 0%, var(--bgMid) 100%);
+        background: linear-gradient(180deg, #f8fbff 0%, #eef3f9 100%);
       }
 
       section.main > div{ max-width: 1250px; }
@@ -72,16 +62,15 @@ st.markdown(
       .wb-header{
         background: var(--card);
         border-radius: 18px;
-        padding: 18px 18px;
-        box-shadow: 0 14px 38px rgba(0,0,0,.18);
-        border: 1px solid rgba(255,255,255,.35);
-        backdrop-filter: blur(10px);
-        margin-bottom: 14px;
+        padding: 18px;
+        box-shadow: 0 12px 30px rgba(0,0,0,.06);
+        border: 1px solid rgba(0,0,0,.04);
+        margin-bottom: 18px;
       }
 
       .wb-title{
         font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-        font-weight: 800;
+        font-weight: 820;
         letter-spacing: .2px;
         color: var(--ink);
         margin: 0;
@@ -90,80 +79,80 @@ st.markdown(
 
       .wb-subtitle{
         color: var(--muted);
-        margin: 4px 0 0 0;
+        margin: 6px 0 0 0;
         font-size: 1.00rem;
       }
 
       .wb-badge{
         display:inline-flex; align-items:center; gap:8px;
-        font-weight:700;
-        color:#041c2c;
-        background: linear-gradient(90deg, rgba(20,184,166,.18), rgba(56,189,248,.18));
-        border: 1px solid rgba(34,211,238,.35);
+        font-weight:750;
+        color: #0b2233;
+        background: linear-gradient(90deg, rgba(20,184,166,.14), rgba(56,189,248,.14));
+        border: 1px solid rgba(34,211,238,.28);
         padding: 6px 10px;
         border-radius: 999px;
         font-size: .85rem;
       }
 
       .wb-side{
-        background: rgba(255,255,255,.90);
-        border: 1px solid rgba(255,255,255,.35);
+        background: var(--card);
+        border: 1px solid rgba(0,0,0,.05);
         border-radius: 16px;
         padding: 14px 14px;
-        box-shadow: 0 12px 28px rgba(0,0,0,.14);
+        box-shadow: 0 10px 24px rgba(0,0,0,.05);
       }
 
       .kpi{
         background: var(--card);
-        border: 1px solid rgba(255,255,255,.35);
-        border-radius: 16px;
-        padding: 14px 14px;
-        box-shadow: 0 10px 22px rgba(0,0,0,.12);
+        border-radius: 14px;
+        padding: 16px;
+        border: 1px solid rgba(0,0,0,.05);
+        box-shadow: 0 6px 18px rgba(0,0,0,.05);
       }
 
-      .kpi-label{ color: var(--muted); font-weight: 650; font-size: .86rem; }
-      .kpi-value{ color: var(--ink); font-weight: 820; font-size: 1.55rem; margin-top: 4px; }
+      .kpi-label{ color: var(--muted); font-weight: 700; font-size: .86rem; }
+      .kpi-value{ color: var(--ink); font-weight: 850; font-size: 1.55rem; margin-top: 4px; }
       .kpi-note{ color: var(--muted); font-size: .82rem; margin-top: 6px; }
 
       .demo{
-        background: linear-gradient(90deg, rgba(196,181,253,.22), rgba(34,211,238,.16));
-        border: 1px solid rgba(79,70,229,.22);
-        color: #071a2b;
-        padding: 10px 12px;
+        background: linear-gradient(90deg, rgba(196,181,253,.18), rgba(34,211,238,.12));
         border-radius: 14px;
-        box-shadow: 0 10px 18px rgba(0,0,0,.10);
+        padding: 12px;
+        border: 1px solid rgba(139,92,246,.20);
+        color: #0f172a;
+        box-shadow: 0 6px 16px rgba(0,0,0,.05);
       }
 
       .narrative-small{
         font-size: 0.88rem;
-        color: rgba(7,26,43,.92);
+        color: #334155;
       }
 
-      /* Primary button: no red */
+      /* Primary button: teal→sky */
       div.stButton > button[kind="primary"]{
-        background: linear-gradient(90deg, rgba(20,184,166,.95), rgba(56,189,248,.95)) !important;
-        color: #041521 !important;
-        border: 1px solid rgba(34,211,238,.45) !important;
-        border-radius: 14px !important;
-        box-shadow: 0 12px 26px rgba(0,0,0,.14) !important;
-        font-weight: 750 !important;
+        background: linear-gradient(90deg, var(--teal), var(--sky)) !important;
+        color: white !important;
+        border-radius: 12px !important;
+        border: none !important;
+        box-shadow: 0 10px 22px rgba(34,211,238,.18) !important;
+        font-weight: 780 !important;
       }
       div.stButton > button[kind="primary"]:hover{
         transform: translateY(-1px);
-        filter: brightness(1.03);
+        filter: brightness(1.02);
       }
 
-      /* Chat bubbles */
+      /* Chat bubbles (keep light) */
       div[data-testid="stChatMessage"]{
-        background: rgba(255,255,255,.92);
+        background: var(--card);
         border-radius: 16px;
         padding: 10px 12px;
-        box-shadow: 0 10px 22px rgba(0,0,0,.12);
-        border: 1px solid rgba(255,255,255,.35);
+        box-shadow: 0 8px 18px rgba(0,0,0,.05);
+        border: 1px solid rgba(0,0,0,.05);
       }
       div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarUser"]) {
-        background: linear-gradient(90deg, rgba(34,211,238,.10), rgba(167,139,250,.10));
-        border: 1px solid rgba(79,70,229,.18);
+        background: linear-gradient(90deg, rgba(34,211,238,.10), rgba(196,181,253,.10));
+        border: 1px solid rgba(79,70,229,.14);
       }
     </style>
     """,
@@ -185,6 +174,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 # ============================================================
 # Helpers
@@ -215,7 +205,6 @@ def call_agent_api(message: str) -> str:
 
     data = r.json()
 
-    # OpenAI-ish format
     if isinstance(data, dict) and data.get("choices"):
         msg = data["choices"][0].get("message", {}) or {}
         if msg.get("content"):
@@ -236,9 +225,6 @@ def build_context(country: str, years: str, sector: str) -> str:
     return "Context: " + ", ".join(parts)
 
 def parse_markdown_table(md: str, header: str) -> pd.DataFrame | None:
-    """
-    Find a markdown table after heading like '### KPI' and parse into DataFrame.
-    """
     pattern = re.compile(rf"^###\s*{re.escape(header)}\s*$", re.IGNORECASE | re.MULTILINE)
     m = pattern.search(md)
     if not m:
@@ -313,38 +299,21 @@ def seeded_rng(*parts: str) -> random.Random:
     seed = int(h[:12], 16)
     return random.Random(seed)
 
-# ---- DEMO data (for KPIs + heatmaps) ----
-def make_demo_data(country: str, years: str, sector: str) -> dict:
+# ---- DEMO data (KPIs + heatmaps) ----
+def make_demo_kpis(country: str, years: str, sector: str) -> dict:
     rng = seeded_rng(country, years, sector)
     commitments = rng.uniform(0.9, 6.5) * 1e9
     disbursements = commitments * rng.uniform(0.45, 0.88)
     projects = int(rng.uniform(35, 220))
     ratio = (disbursements / commitments) * 100.0
-
-    narrative = (
-        f"**DEMO DATA (KB slice missing)**\n\n"
-        f"- Scope: **{country}**, **{years}**"
-        + (f", **{sector}**" if sector and sector != "All" else "")
-        + "\n- Dashboard metrics below are **placeholder** values generated to validate UX.\n"
-        "- Once the KB returns the KPI + Trend/Sectors/Mix tables, the dashboard will automatically switch to KB data."
-    )
-
     return {
-        "kpis": {
-            "Commitments": commitments,
-            "Disbursements": disbursements,
-            "Projects": projects,
-            "Disbursement Ratio %": ratio,
-        },
-        "narrative": narrative,
+        "Commitments": commitments,
+        "Disbursements": disbursements,
+        "Projects": projects,
+        "Disbursement Ratio %": ratio,
     }
 
 def make_demo_heatmap_df(country: str, years: str, sector: str) -> pd.DataFrame:
-    """
-    Heatmap dataset:
-      rows = sectors, cols = periods (quarters), value = 'Intensity' proxy.
-    Deterministic by filters.
-    """
     rng = seeded_rng(country, years, sector)
     periods = [f"{y} Q{q}" for y in years_range_to_list(years) for q in (1, 2, 3, 4)]
     periods = periods[:12] if len(periods) > 12 else periods
@@ -370,7 +339,6 @@ def make_demo_type_heatmap_df(country: str, years: str, sector: str) -> pd.DataF
     periods = [f"{y} Q{q}" for y in years_range_to_list(years) for q in (1, 2, 3, 4)]
     periods = periods[:12] if len(periods) > 12 else periods
     types = ["Grants", "Loans", "Technical Assistance", "Equity/Guarantees"]
-
     rows = []
     for t in types:
         bias = rng.uniform(0.7, 1.5)
@@ -380,7 +348,7 @@ def make_demo_type_heatmap_df(country: str, years: str, sector: str) -> pd.DataF
     return pd.DataFrame(rows)
 
 def render_heatmap(df: pd.DataFrame, title: str, row_title: str):
-    ramp = ["#0b1f3a", "#14b8a6", "#22d3ee", "#38bdf8", "#c4b5fd", "#8b5cf6"]
+    ramp = ["#0f172a", "#14b8a6", "#22d3ee", "#38bdf8", "#c4b5fd", "#8b5cf6"]
     chart = (
         alt.Chart(df)
         .mark_rect(cornerRadius=3)
@@ -403,7 +371,7 @@ def render_heatmap(df: pd.DataFrame, title: str, row_title: str):
     )
     st.altair_chart(chart, use_container_width=True)
 
-# ---- Dashboard prompt spec (formatted text only; tables for charts) ----
+# ---- KB dashboard prompt spec (formatted markdown only; tables for charts) ----
 def dashboard_prompt(context: str) -> str:
     return f"""
 You are the World Bank IATI Intelligence Agent.
@@ -445,7 +413,6 @@ If the KB does not contain enough data to fill tables, explicitly write 'NA' in 
 """
 
 def build_dashboard_from_md(md: str):
-    """Parses KB markdown into dataframes for charts. If missing/NA, caller should DEMO fallback."""
     kpi_df = parse_markdown_table(md, "KPI")
     trend_df = parse_markdown_table(md, "Trend")
     sectors_df = parse_markdown_table(md, "Sectors")
@@ -461,13 +428,10 @@ def build_dashboard_from_md(md: str):
     if missing:
         return None
 
-    # KPI
     kpi_map = {}
     for _, row in kpi_df.iterrows():
         metric = str(row.get("Metric", "")).strip()
         val = str(row.get("Value", "")).strip()
-        if not metric:
-            continue
         ml = metric.lower()
         if "commit" in ml:
             kpi_map["Commitments"] = money_to_float(val)
@@ -481,19 +445,16 @@ def build_dashboard_from_md(md: str):
         elif "ratio" in ml:
             kpi_map["Disbursement Ratio %"] = pct_to_float(val)
 
-    # Trend
     tdf = trend_df.rename(columns={c: c.strip() for c in trend_df.columns})
     if "Commitments" in tdf.columns:
         tdf["Commitments"] = tdf["Commitments"].apply(money_to_float)
     if "Disbursements" in tdf.columns:
         tdf["Disbursements"] = tdf["Disbursements"].apply(money_to_float)
 
-    # Sectors
     sdf = sectors_df.rename(columns={c: c.strip() for c in sectors_df.columns})
     if "Value" in sdf.columns:
         sdf["Value"] = sdf["Value"].apply(money_to_float)
 
-    # Mix
     mdf = mix_df.rename(columns={c: c.strip() for c in mix_df.columns})
     if "Value" in mdf.columns:
         mdf["Value"] = mdf["Value"].apply(money_to_float)
@@ -533,29 +494,37 @@ with st.sidebar:
     sector = st.selectbox("Sector", ["All", "Health", "Education", "Energy", "Transport", "Water", "Governance", "Agriculture"], index=0)
 
     st.divider()
-    st.markdown("### Quick Actions")
+    st.markdown("### Quick Actions (KB-aware)")
     PROMPTS = {
         "Refresh dashboard (narrative + tables)": (
             "Generate a dashboard narrative and KPI/Chart tables for the current context. "
             "Return formatted markdown only (no JSON)."
         ),
-        "Executive portfolio brief": (
-            "Write a 1-page executive brief for the current context. "
-            "Include: key trends, what changed, what matters, and 5 evidence items (IATI activity IDs/titles if available)."
+        "Transaction flow diagnostics (commit vs disburse)": (
+            "Analyze commitment vs disbursement transactions for the current context. "
+            "Identify lag patterns between commitment dates and disbursement dates, and flag anomalies. "
+            "Cite IATI activity identifiers."
         ),
-        "Effectiveness & results scan": (
-            "Identify projects with the strongest outcome evidence in the current context. "
-            "Summarize patterns and cite evidence (IATI IDs/titles)."
+        "Sector concentration & diversification": (
+            "Assess sector concentration in the selected portfolio. "
+            "Identify over-reliance on specific sectors and summarize diversification opportunities. "
+            "Cite sector codes/names and IATI activity identifiers where possible."
         ),
-        "Risk & data quality scan": (
-            "Flag anomalies, missingness, or suspicious patterns in the current context. "
-            "Be specific and cite evidence where possible."
+        "Results & indicator performance scan": (
+            "Identify projects with results frameworks and measurable indicators in the current context. "
+            "Summarize outcome trends and note missing or weak indicator data. "
+            "Cite IATI activity IDs and result titles."
+        ),
+        "Donor / implementing partner network map": (
+            "Analyze participating organizations in the selected portfolio. "
+            "Identify top donors and implementing agencies, and highlight duplication/coordination gaps. "
+            "Cite organization identifiers and linked activities."
         ),
     }
     quick = st.selectbox("Insert a standard prompt", ["—"] + list(PROMPTS.keys()))
     if quick != "—":
         st.session_state["draft_prompt"] = PROMPTS[quick]
-        st.success("Prompt loaded (you can send it in Chat).")
+        st.success("Prompt loaded (send it in Chat).")
 
     st.divider()
     st.markdown("### Connection")
@@ -584,6 +553,8 @@ if "draft_prompt" not in st.session_state:
     st.session_state["draft_prompt"] = ""
 if "dash_md" not in st.session_state:
     st.session_state["dash_md"] = ""
+if "last_response" not in st.session_state:
+    st.session_state["last_response"] = ""
 
 # ============================================================
 # Dashboard
@@ -604,18 +575,21 @@ if refresh:
 
 dash_md = st.session_state.get("dash_md", "").strip()
 
-kb_parsed = None
-if dash_md:
-    kb_parsed = build_dashboard_from_md(dash_md)
-
+kb_parsed = build_dashboard_from_md(dash_md) if dash_md else None
 is_demo = kb_parsed is None
+
 if is_demo:
-    demo = make_demo_data(country, years, sector)
-    narrative = demo["narrative"]
-    kpis_map = demo["kpis"]
+    kpis_map = make_demo_kpis(country, years, sector)
+    narrative = (
+        f"**DEMO DATA (KB slice missing)**\n\n"
+        f"- Scope: **{country}**, **{years}**"
+        + (f", **{sector}**" if sector and sector != "All" else "")
+        + "\n- Metrics + heatmaps are placeholder values generated to validate UX.\n"
+        "- Once the KB returns KPI/Trend/Sectors/Mix tables, the dashboard will auto-switch to KB data."
+    )
 else:
-    narrative = kb_parsed["narrative"]
     kpis_map = kb_parsed["kpis"]
+    narrative = kb_parsed["narrative"]
 
 if is_demo:
     st.markdown(
@@ -641,7 +615,7 @@ for i, (label, value, note) in enumerate(kpis):
             unsafe_allow_html=True,
         )
 
-# Charts
+# Charts + Narrative
 c1, c2 = st.columns([1.4, 1.0], gap="large")
 c3, c4 = st.columns([1.0, 1.0], gap="large")
 
@@ -691,6 +665,21 @@ with c4:
     st.markdown("#### Dashboard Narrative (Formatted Text)")
     st.markdown(f"<div class='narrative-small'>{narrative}</div>", unsafe_allow_html=True)
     st.caption(context)
+
+# Export dashboard markdown
+st.markdown("### Export Dashboard Output")
+exp1, exp2 = st.columns([1, 1])
+with exp1:
+    st.download_button(
+        label="Download Dashboard (.md)",
+        data=(dash_md if dash_md else narrative),
+        file_name="dashboard_output.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
+with exp2:
+    st.caption("Copy-ready output:")
+    st.code((dash_md if dash_md else narrative), language="markdown")
 
 st.divider()
 
@@ -742,5 +731,21 @@ if outgoing:
         st.markdown(reply)
 
     st.session_state.messages.append({"role": "assistant", "content": reply})
+    st.session_state["last_response"] = reply
+
+# Export last chat response
+st.markdown("### Export Last Chat Response")
+c_exp1, c_exp2 = st.columns([1, 1])
+with c_exp1:
+    st.download_button(
+        label="Download Last Response (.md)",
+        data=(st.session_state.get("last_response") or ""),
+        file_name="agent_response.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
+with c_exp2:
+    st.caption("Copy-ready last response:")
+    st.code((st.session_state.get("last_response") or ""), language="markdown")
 
 st.caption("© 2026 World Bank — IATI Intelligence Agent (KB-first • DEMO heatmap fallback clearly labeled)")
