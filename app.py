@@ -348,18 +348,38 @@ def make_demo_type_heatmap_df(country: str, years: str, sector: str) -> pd.DataF
     return pd.DataFrame(rows)
 
 def render_heatmap(df: pd.DataFrame, title: str, row_title: str):
-    ramp = ["#0f172a", "#14b8a6", "#22d3ee", "#38bdf8", "#c4b5fd", "#8b5cf6"]
+    """
+    Standard risk-style heatmap:
+    Low  = Green
+    Medium = Yellow
+    High = Red
+    Includes legend.
+    """
+
+    # Risk color ramp (Low → Medium → High)
+    risk_colors = [
+        "#0b8a3e",   # Deep Green (Low)
+        "#6ccf8e",   # Light Green
+        "#ffd84d",   # Yellow (Medium)
+        "#ff9f1a",   # Orange
+        "#d90429"    # Red (High/Critical)
+    ]
+
     chart = (
         alt.Chart(df)
-        .mark_rect(cornerRadius=3)
+        .mark_rect(stroke="white", strokeWidth=1)
         .encode(
-            x=alt.X("Column:N", title=None, axis=alt.Axis(labelAngle=90)),
+            x=alt.X("Column:N", title="Likelihood", axis=alt.Axis(labelAngle=90)),
             y=alt.Y("Row:N", title=row_title),
             color=alt.Color(
                 "Intensity:Q",
-                title="Intensity",
-                scale=alt.Scale(range=ramp),
-                legend=alt.Legend(orient="right"),
+                title="Risk Level",
+                scale=alt.Scale(range=risk_colors),
+                legend=alt.Legend(
+                    orient="right",
+                    title="Risk Level",
+                    gradientLength=150
+                ),
             ),
             tooltip=[
                 alt.Tooltip("Row:N", title=row_title),
@@ -367,9 +387,14 @@ def render_heatmap(df: pd.DataFrame, title: str, row_title: str):
                 alt.Tooltip("Intensity:Q", format=".1f"),
             ],
         )
-        .properties(height=320, title=title)
+        .properties(
+            height=340,
+            title=title
+        )
     )
+
     st.altair_chart(chart, use_container_width=True)
+
 
 # ---- KB dashboard prompt spec (formatted markdown only; tables for charts) ----
 def dashboard_prompt(context: str) -> str:
